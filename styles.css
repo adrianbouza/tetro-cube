@@ -358,4 +358,51 @@ kbd {
         flex-direction: column;
         align-items: center;
     }
+    
+    /* Mobile game canvas adjustments */
+    .game-canvas-container {
+        max-width: 100%;
+        overflow-x: auto;
+    }
+    
+    /* Prevent zoom on mobile when tapping buttons */
+    canvas {
+        touch-action: manipulation;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+    }
+    
+    /* Mobile specific adjustments for very small screens */
+    @media (max-width: 480px) {
+        .game-container {
+            padding: 15px;
+        }
+        
+        .header h1 {
+            font-size: 1.8em;
+        }
+        
+        .subtitle {
+            font-size: 1em;
+        }
+        
+        body {
+            padding: 10px;
+        }
+        
+        /* Make score panels more compact on small screens */
+        .score-grid {
+            gap: 10px;
+        }
+        
+        .score-card {
+            padding: 15px;
+        }
+        
+        .score-value {
+            font-size: 1.5em;
+        }
+    }
 }
