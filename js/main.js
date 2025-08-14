@@ -23,6 +23,10 @@ class GameScene extends Phaser.Scene {
         this.tempPosition = null; // Temporary position before confirmation
         this.isMovingPiece = false; // True when piece is in temporary move state
         
+        // Floating piece system
+        this.floatingPiece = null; // Piece that can move freely without collision
+        this.isFloatingMode = false; // True when a piece is in floating mode
+        
         // Animation blocking system
         this.isAnimationPlaying = false; // Block all actions during animations
         
@@ -55,7 +59,28 @@ class GameScene extends Phaser.Scene {
         
         this.pieceTypes = Object.keys(this.pieceTemplates);
         
+        // Generate initial next pieces now that templates are defined
+        this.generateNextPieces();
+        
         this.initializeGrid();
+    }
+    
+    generateNextPieces() {
+        // Check if pieceTemplates is defined
+        if (!this.pieceTemplates || !this.pieceTypes) {
+            console.warn('pieceTemplates not yet defined - skipping generateNextPieces');
+            return;
+        }
+        
+        // Ensure we always have 2 next pieces ready
+        while (this.nextPieces.length < 2) {
+            const randomType = this.pieceTypes[Math.floor(Math.random() * this.pieceTypes.length)];
+            this.nextPieces.push({
+                type: randomType,
+                color: this.pieceTemplates[randomType].color
+            });
+        }
+        console.log('Next pieces generated:', this.nextPieces.map(p => `${p.type}(${p.color.toString(16)})`));
     }
     
     initializeGrid() {
@@ -106,7 +131,7 @@ class GameScene extends Phaser.Scene {
         
         // Input handling
         this.cursors = this.input.keyboard.createCursorKeys();
-        this.input.keyboard.on('keydown-SPACE', this.spawnNewPiece.bind(this));
+        // Don't bind SPACE to spawnNewPiece automatically - handle it in handleInput instead
         
         // Add click handling for piece selection
         this.input.on('pointerdown', this.handleGridClick.bind(this));
@@ -123,8 +148,11 @@ class GameScene extends Phaser.Scene {
         // Update score display
         this.updateScoreDisplay();
         
+        // Update next pieces display
+        this.updateNextPiecesDisplay();
+        
         // Show initial instructions
-        this.showMessage('Presiona ESPACIO para generar pieza. Las fusiones ocurren al perder focus.');
+        this.showMessage('Presiona ESPACIO para generar pieza.');
         
         // Don't spawn test pieces automatically - start with empty board
         // Players can use SPACE to spawn pieces or testScenario() functions
@@ -158,6 +186,24 @@ class GameScene extends Phaser.Scene {
         };
         
         window.gameScene = this; // Make the whole game scene available for debugging
+        
+        // Debug function to check game state
+        window.debugGameState = () => {
+            console.log('=== GAME STATE DEBUG ===');
+            console.log(`Floating mode: ${this.isFloatingMode}`);
+            console.log(`Floating piece: ${this.floatingPiece ? `${this.floatingPiece.type}(${this.floatingPiece.id}) at (${this.floatingPiece.x},${this.floatingPiece.y})` : 'None'}`);
+            console.log(`Total pieces: ${this.pieces.length}`);
+            this.pieces.forEach(p => console.log(`  - ${p.type}(${p.id}) at (${p.x},${p.y}) color:${p.color.toString(16)}`));
+            console.log('Grid state:');
+            for (let row = 0; row < this.gridHeight; row++) {
+                let rowStr = '';
+                for (let col = 0; col < this.gridWidth; col++) {
+                    rowStr += (this.grid[row][col] || '0').toString().padStart(2, ' ') + ' ';
+                }
+                console.log(`Row ${row}: ${rowStr}`);
+            }
+            console.log('=== END DEBUG ===');
+        };
     }
     
     create2048StyleTile(type, color, textColor, customText = null) {
@@ -224,6 +270,13 @@ class GameScene extends Phaser.Scene {
         
         console.log(`Cell clicked: (${row}, ${col})`);
         
+        // If we have a floating piece, move it to the clicked position
+        if (this.isFloatingMode && this.floatingPiece) {
+            console.log(`Moving floating piece to (${row}, ${col})`);
+            this.moveFloatingPieceTo(row, col);
+            return;
+        }
+        
         // Find piece at this position
         const pieceId = this.grid[row][col];
         if (pieceId) {
@@ -233,15 +286,22 @@ class GameScene extends Phaser.Scene {
                 console.log(`Selected piece ${piece.type} with ID ${piece.id}`);
             }
         } else {
-            // Clicked on empty cell - deselect
+            // Clicked on empty cell - deselect current piece
             this.deselectPiece();
         }
     }
     
     selectPiece(piece) {
+        // If we have a floating piece, show a message
+        if (this.isFloatingMode && this.floatingPiece) {
+            this.showMessage('Confirma la pieza flotante primero (ESPACIO)');
+            return;
+        }
+        
         // Clear any existing highlights first
         this.clearSelectionHighlights();
         
+        // Select the piece normally (not floating - old pieces stay placed)
         this.selectedPiece = piece;
         this.isIndividualMode = true;
         this.highlightSelectedPiece();
@@ -342,6 +402,97 @@ class GameScene extends Phaser.Scene {
                 this.messageText = null;
             }
         });
+    }
+
+    // ===== COOL FX MESSAGES =====
+    playFXText(message, x, y, opts = {}) {
+        const color = opts.color || '#ffd54f';
+        const stroke = opts.stroke || '#000000';
+        const fontSize = opts.fontSize || 44;
+        const duration = opts.duration || 1200;
+        const startScale = opts.startScale || 0.6;
+        const peakScale = opts.peakScale || 1.3;
+        const endScale = opts.endScale || 1.0;
+        const shadowColor = opts.shadowColor || '#000000';
+        const shadowBlur = opts.shadowBlur || 8;
+        const shadowOffset = opts.shadowOffset || 4;
+
+        const txt = this.add.text(x, y, message, {
+            fontSize: `${fontSize}px`,
+            fontFamily: 'Arial Black, Arial, sans-serif',
+            color,
+            stroke: stroke,
+            strokeThickness: 6,
+        });
+        txt.setOrigin(0.5, 0.5);
+        txt.setShadow(shadowOffset, shadowOffset, shadowColor, shadowBlur, true, true);
+        txt.setScale(startScale);
+        txt.setAlpha(0.0);
+
+        // Pop-in, slight overshoot, then fade out
+        this.tweens.add({
+            targets: txt,
+            scaleX: peakScale,
+            scaleY: peakScale,
+            alpha: 1.0,
+            duration: Math.floor(duration * 0.35),
+            ease: 'Back.Out',
+            onComplete: () => {
+                this.tweens.add({
+                    targets: txt,
+                    scaleX: endScale,
+                    scaleY: endScale,
+                    duration: Math.floor(duration * 0.25),
+                    ease: 'Sine.Out',
+                    onComplete: () => {
+                        this.tweens.add({
+                            targets: txt,
+                            alpha: 0,
+                            y: y - 20,
+                            duration: Math.floor(duration * 0.4),
+                            ease: 'Sine.In',
+                            onComplete: () => txt.destroy()
+                        });
+                    }
+                });
+            }
+        });
+    }
+
+    playLineClearFX(linesToClear) {
+        if (!linesToClear || linesToClear.length === 0) return;
+        const count = linesToClear.length;
+        const centerX = (this.gridWidth * this.cellSize) / 2;
+        const centerY = (this.gridHeight * this.cellSize) / 2;
+        let label = '¡LÍNEA!';
+        if (count === 2) label = '¡DOBLE LÍNEA!';
+        else if (count === 3) label = '¡TRIPLE LÍNEA!';
+        else if (count >= 4) label = '¡MEGALÍNEA!';
+        this.playFXText(label, centerX, centerY, { color: '#4fc3f7', fontSize: 52 });
+    }
+
+    playMergeFX(piecesToMerge) {
+        if (!piecesToMerge || piecesToMerge.length === 0) return;
+        // Compute merge center in pixels
+        let sumX = 0, sumY = 0, cells = 0;
+        piecesToMerge.forEach(p => {
+            const shape = this.getPieceShape(p);
+            for (let r = 0; r < shape.length; r++) {
+                for (let c = 0; c < shape[r].length; c++) {
+                    if (shape[r][c]) {
+                        sumX += (p.x + c + 0.5) * this.cellSize;
+                        sumY += (p.y + r + 0.5) * this.cellSize;
+                        cells++;
+                    }
+                }
+            }
+        });
+        if (cells === 0) return;
+        const cx = sumX / cells;
+        const cy = sumY / cells;
+
+        const label = piecesToMerge.length >= 4 ? '¡MEGAFUSIÓN!' : '¡FUSIÓN!';
+        this.playFXText(label, cx, cy, { color: '#ffd54f', fontSize: 50 });
     }
     
     createMobileControls() {
@@ -558,15 +709,25 @@ class GameScene extends Phaser.Scene {
             this.linesElement.textContent = this.linesCleared;
         }
         
-        // Check for game over due to score
-        if (this.score <= 0) {
-            console.log('Game Over - Score reached 0 or below');
-            this.gameOver();
+        // Si la puntuación es exactamente 0, marcamos Game Over pendiente (no perdemos aún)
+        if (this.score === 0 && !this.pendingGameOver && this.gameState === 'playing') {
+            this.pendingGameOver = true;
+            console.log('Score = 0: marcando Game Over pendiente hasta resolver líneas/merges');
+            this.showMessage('Puntuación 0: completa líneas para evitar perder');
         }
     }
     
     addScore(points, reason = '') {
-        this.score += points;
+        const tentative = this.score + points;
+        // Si bajaríamos de 0, es perder inmediato; no permitimos negativos
+        if (tentative < 0) {
+            this.score = 0; // clamp visual
+            console.log(`Score intento por debajo de 0 con ${points} (${reason}). Game Over inmediato.`);
+            this.updateScoreDisplay();
+            this.gameOver('puntuación < 0 (sin puntos para ' + (reason || 'la acción') + ')');
+            return;
+        }
+        this.score = tentative;
         console.log(`Score ${points > 0 ? '+' : ''}${points} (${reason}): ${this.score}`);
         this.updateScoreDisplay();
         
@@ -591,6 +752,14 @@ class GameScene extends Phaser.Scene {
         if (this.isAnimationPlaying) {
             this.showMessage('Espera a que termine la animación');
             return;
+        }
+        
+        // If we have a floating piece, try to consolidate it first
+        if (this.isFloatingMode && this.floatingPiece) {
+            if (!this.tryConsolidateFloatingPiece()) {
+                this.showMessage('No se puede añadir pieza - consolida la pieza flotante primero');
+                return;
+            }
         }
         
         console.log('Space pressed - first checking lines, then spawning new piece');
@@ -620,28 +789,258 @@ class GameScene extends Phaser.Scene {
                 // After line animation completes, check for merges
                 console.log('Step 2: Checking for merges after line clearing...');
                 this.checkAndMergeSameColorPieces(() => {
-                    // After all animations complete, spawn new piece
+                    // After all animations complete, spawn the new floating piece now
                     console.log('Step 3: Spawning new piece after all animations complete');
-                    this.spawnNewPieceAfterAnimations();
+                    this.spawnNextPieceDirectly();
+                    this.isAnimationPlaying = false; // Unblock actions
+                    this.resolvePendingGameOver();
                 });
             });
         } else {
             // No lines to clear, but still check for merges
             console.log('No lines found - checking for merges only');
             this.checkAndMergeSameColorPieces(() => {
-                // After merge animations complete, spawn new piece
+                // After merge animations complete, spawn the new floating piece now
                 console.log('Step 2: Spawning new piece after merge check');
-                this.spawnNewPieceAfterAnimations();
+                this.spawnNextPieceDirectly();
+                this.isAnimationPlaying = false; // Unblock actions
+                this.resolvePendingGameOver();
             });
         }
     }
     
     spawnNewPieceAfterAnimations() {
-        console.log('All animations complete - spawning new piece now');
-        this.spawnNextPieceRandomly();
+        console.log('All animations complete - no auto-spawn (waiting for SPACE)');
         this.isAnimationPlaying = false; // Unblock actions
-        this.showMessage('Nueva pieza añadida');
+        this.showMessage('Pulsa ESPACIO para nueva pieza');
     }
+    
+    spawnNextPieceDirectly() {
+        console.log(`Starting spawnNextPieceDirectly - nextPieces length: ${this.nextPieces.length}`);
+        
+        // Ensure we have next pieces available
+        if (this.nextPieces.length === 0) {
+            console.warn('No next pieces available, generating new ones');
+            this.generateNextPieces();
+            console.log(`After generateNextPieces - nextPieces length: ${this.nextPieces.length}`);
+        }
+        
+        // Get the first piece from next pieces queue
+        let nextPieceTemplate = this.nextPieces.shift();
+        console.log('nextPieceTemplate after shift:', nextPieceTemplate);
+        
+        // Safety check - if still no piece template, create a fallback
+        if (!nextPieceTemplate) {
+            console.error('Failed to get next piece template, creating fallback');
+            const fallbackType = 'SINGLE';
+            nextPieceTemplate = {
+                type: fallbackType,
+                color: this.pieceTemplates[fallbackType].color
+            };
+            console.log('Created fallback nextPieceTemplate:', nextPieceTemplate);
+        }
+        
+        // Additional safety check for color property
+        if (!nextPieceTemplate.color) {
+            console.error('nextPieceTemplate.color is undefined, fixing...');
+            nextPieceTemplate.color = this.pieceTemplates[nextPieceTemplate.type].color;
+            console.log('Fixed nextPieceTemplate:', nextPieceTemplate);
+        }
+        
+        // Generate a new piece to keep the queue filled
+        this.generateNextPieces();
+        
+    // Try to find a good spawn position (testing all rotations)
+    const spawnPosition = this.findGoodSpawnPosition(nextPieceTemplate.type);
+        if (!spawnPosition) {
+            this.showMessage('¡No hay espacio para la nueva pieza!');
+            this.gameOver('no hay espacio para la nueva pieza');
+            return;
+        }
+        
+        const newPiece = {
+            id: this.nextPieceId++,
+            type: nextPieceTemplate.type,
+            x: spawnPosition.x,
+            y: spawnPosition.y,
+            rotation: spawnPosition.rotation || 0,
+            color: nextPieceTemplate.color
+        };
+        
+        // Final safety check for newPiece.color
+        if (!newPiece.color) {
+            console.error('newPiece.color is undefined, using fallback color');
+            newPiece.color = this.pieceTemplates.SINGLE.color;
+        }
+        
+        console.log('Final newPiece object:', newPiece);
+        
+        // Add the new piece as floating piece (semi-transparent)
+        this.floatingPiece = newPiece;
+        this.isFloatingMode = true;
+        
+        // Don't add to pieces array yet - will be added when confirmed
+        // Don't place on grid yet - floating pieces don't occupy grid
+        
+        console.log(`Spawned floating piece ${newPiece.type}(${newPiece.id}) at (${spawnPosition.x}, ${spawnPosition.y}) with color ${newPiece.color.toString(16)}`);
+        console.log(`Next pieces in queue: ${this.nextPieces.map(p => `${p.type}(${p.color ? p.color.toString(16) : 'undefined'})`).join(', ')}`);
+        
+        // Render grid with floating piece (semi-transparent)
+        this.renderGrid();
+        this.updateNextPiecesDisplay();
+        
+        console.log(`New piece ${newPiece.type}(${newPiece.id}) is now floating - use SPACE to confirm position`);
+        this.showMessage(`Pieza ${newPiece.type} flotante - ESPACIO para confirmar`);
+    }
+    
+    findGoodSpawnPosition(pieceType) {
+        // Try center first
+        const centerX = Math.floor(this.gridWidth / 2);
+        const centerY = Math.floor(this.gridHeight / 2);
+        
+        // Try center with all 4 rotations
+        for (let rot = 0; rot < 4; rot++) {
+            const testPiece = { type: pieceType, rotation: rot };
+            if (this.canPlacePieceAt(testPiece, centerX, centerY)) {
+                return { x: centerX, y: centerY, rotation: rot };
+            }
+        }
+        
+        // Try other positions in expanding rings from center, testing all rotations
+        for (let radius = 1; radius <= Math.max(this.gridWidth, this.gridHeight); radius++) {
+            for (let x = Math.max(0, centerX - radius); x <= Math.min(this.gridWidth - 1, centerX + radius); x++) {
+                for (let y = Math.max(0, centerY - radius); y <= Math.min(this.gridHeight - 1, centerY + radius); y++) {
+                    for (let rot = 0; rot < 4; rot++) {
+                        const testPiece = { type: pieceType, rotation: rot };
+                        if (this.canPlacePieceAt(testPiece, x, y)) {
+                            return { x, y, rotation: rot };
+                        }
+                    }
+                }
+            }
+        }
+        
+        return null; // No position found
+    }
+    
+    updateNextPiecesDisplay() {
+        // Remove existing next piece displays if they exist
+        if (this.nextPieceDisplays) {
+            this.nextPieceDisplays.forEach(display => {
+                if (display && display.destroy) {
+                    display.destroy();
+                }
+            });
+        }
+        this.nextPieceDisplays = [];
+        
+        // Create display for next pieces on the right side of the grid
+        const startX = this.gridWidth * this.cellSize + 20;
+        const startY = 50;
+        const previewSize = 30; // Smaller than normal cells
+        
+        // Add title
+        const titleText = this.add.text(startX, startY - 30, 'PRÓXIMAS:', {
+            fontSize: '14px',
+            fontFamily: 'Arial, sans-serif',
+            color: '#ffffff',
+            fontStyle: 'bold'
+        });
+        this.nextPieceDisplays.push(titleText);
+        
+        this.nextPieces.forEach((pieceTemplate, index) => {
+            const yOffset = index * 80;
+            const pieceY = startY + yOffset;
+            
+            // Get the shape of the piece
+            const shape = this.pieceTemplates[pieceTemplate.type].shape;
+            
+            // Create preview of the piece
+            for (let row = 0; row < shape.length; row++) {
+                for (let col = 0; col < shape[row].length; col++) {
+                    if (shape[row][col]) {
+                        const x = startX + col * previewSize;
+                        const y = pieceY + row * previewSize;
+                        
+                        // Create a small preview cell
+                        const previewCell = this.add.rectangle(x, y, previewSize - 2, previewSize - 2, pieceTemplate.color);
+                        previewCell.setStrokeStyle(1, 0xffffff);
+                        this.nextPieceDisplays.push(previewCell);
+                    }
+                }
+            }
+            
+            // Add piece type label
+            const labelText = this.add.text(startX, pieceY + 40, pieceTemplate.type, {
+                fontSize: '10px',
+                fontFamily: 'Arial, sans-serif',
+                color: '#ffffff'
+            });
+            this.nextPieceDisplays.push(labelText);
+        });
+    }
+    
+    
+    
+    isFloatingPositionValid(piece, x, y) {
+        const shape = this.getPieceShape(piece);
+        
+        for (let row = 0; row < shape.length; row++) {
+            for (let col = 0; col < shape[row].length; col++) {
+                if (shape[row][col]) {
+                    const gridX = x + col;
+                    const gridY = y + row;
+                    
+                    // Bounds-only check for floating pieces
+                    if (gridX < 0 || gridX >= this.gridWidth || 
+                        gridY < 0 || gridY >= this.gridHeight) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+    
+    performPostConsolidationChecks() {
+        console.log('Performing post-consolidation checks: lines and merges (no auto-spawn)');
+        
+        // Clear any selected piece state
+        if (this.selectedPiece) {
+            this.selectedPiece = null;
+            this.isIndividualMode = false;
+            this.clearSelectionHighlights();
+        }
+        
+        // Block actions during the entire sequence
+        this.isAnimationPlaying = true;
+        
+        // Check for completed lines first
+        const hasCompletedLines = this.hasCompletedLines();
+        
+        const finish = () => {
+            // After animations complete, just unlock input; do NOT spawn automatically
+            this.isAnimationPlaying = false;
+            this.renderGrid();
+            this.showMessage('Pieza confirmada - pulsa ESPACIO para nueva pieza');
+            this.resolvePendingGameOver();
+        };
+
+        if (hasCompletedLines) {
+            console.log('Lines found after consolidation - clearing them');
+            this.checkAndClearRectangles(() => {
+                // After line animation completes, check for merges
+                console.log('Checking for merges after line clearing...');
+                this.checkAndMergeSameColorPieces(() => finish());
+            });
+        } else {
+            // No lines to clear, but still check for merges
+            console.log('No lines found after consolidation - checking for merges only');
+            this.checkAndMergeSameColorPieces(() => finish());
+        }
+    }
+    
+    
     
     checkAndSpawnNewPieces() {
         // Only spawn if we have less than a reasonable number of pieces on the board
@@ -664,8 +1063,8 @@ class GameScene extends Phaser.Scene {
                 const spawnInterval = 4000; // 4 seconds between auto-spawns (slightly longer)
                 
                 if (currentTime - this.lastSpawnTime > spawnInterval) {
-                    console.log('Auto-spawning new piece...');
-                    this.spawnNextPieceRandomly();
+                    console.log('Auto-spawning new floating piece...');
+                    this.spawnNextPieceDirectly();
                     this.lastSpawnTime = currentTime;
                 }
             }
@@ -690,61 +1089,102 @@ class GameScene extends Phaser.Scene {
             return;
         }
         
-        // New rule: Always require a piece to be selected before moving
-        if (Phaser.Input.Keyboard.JustDown(this.cursors.left)) {
-            if (this.selectedPiece) {
-                console.log('Left arrow pressed, moving selected piece left by 1 cell');
-                this.moveSelectedPieceOneCell(-1, 0);
-            } else {
-                console.log('No piece selected! Click on a piece first.');
-                this.showMessage('Selecciona una pieza primero');
+        // Priority: Handle floating piece movement first
+        if (this.isFloatingMode && this.floatingPiece) {
+            if (Phaser.Input.Keyboard.JustDown(this.cursors.left)) {
+                console.log('Left arrow pressed, moving floating piece left');
+                this.moveFloatingPiece(-1, 0);
+            } else if (Phaser.Input.Keyboard.JustDown(this.cursors.right)) {
+                console.log('Right arrow pressed, moving floating piece right');
+                this.moveFloatingPiece(1, 0);
+            } else if (Phaser.Input.Keyboard.JustDown(this.cursors.down)) {
+                console.log('Down arrow pressed, moving floating piece down');
+                this.moveFloatingPiece(0, 1);
+            } else if (Phaser.Input.Keyboard.JustDown(this.cursors.up)) {
+                console.log('Up arrow pressed, moving floating piece up');
+                this.moveFloatingPiece(0, -1);
+            } else if (Phaser.Input.Keyboard.JustDown(this.input.keyboard.addKey('R'))) {
+                console.log('R key pressed, rotating floating piece');
+                this.rotateFloatingPiece();
             }
-        }
-        
-        if (Phaser.Input.Keyboard.JustDown(this.cursors.right)) {
-            if (this.selectedPiece) {
-                console.log('Right arrow pressed, moving selected piece right by 1 cell');
-                this.moveSelectedPieceOneCell(1, 0);
-            } else {
-                console.log('No piece selected! Click on a piece first.');
-                this.showMessage('Selecciona una pieza primero');
+        } else {
+            // Normal piece movement when no floating piece
+            if (Phaser.Input.Keyboard.JustDown(this.cursors.left)) {
+                if (this.selectedPiece) {
+                    console.log('Left arrow pressed, moving selected piece left by 1 cell');
+                    this.moveSelectedPieceOneCell(-1, 0);
+                } else {
+                    console.log('No piece selected! Click on a piece first.');
+                    this.showMessage('Selecciona una pieza primero');
+                }
             }
-        }
-        
-        if (Phaser.Input.Keyboard.JustDown(this.cursors.down)) {
-            if (this.selectedPiece) {
-                console.log('Down arrow pressed, moving selected piece down by 1 cell');
-                this.moveSelectedPieceOneCell(0, 1);
-            } else {
-                console.log('No piece selected! Click on a piece first.');
-                this.showMessage('Selecciona una pieza primero');
+            
+            if (Phaser.Input.Keyboard.JustDown(this.cursors.right)) {
+                if (this.selectedPiece) {
+                    console.log('Right arrow pressed, moving selected piece right by 1 cell');
+                    this.moveSelectedPieceOneCell(1, 0);
+                } else {
+                    console.log('No piece selected! Click on a piece first.');
+                    this.showMessage('Selecciona una pieza primero');
+                }
             }
-        }
-        
-        if (Phaser.Input.Keyboard.JustDown(this.cursors.up)) {
-            if (this.selectedPiece) {
-                console.log('Up arrow pressed, moving selected piece up by 1 cell');
-                this.moveSelectedPieceOneCell(0, -1);
-            } else {
-                console.log('No piece selected! Click on a piece first.');
-                this.showMessage('Selecciona una pieza primero');
+            
+            if (Phaser.Input.Keyboard.JustDown(this.cursors.down)) {
+                if (this.selectedPiece) {
+                    console.log('Down arrow pressed, moving selected piece down by 1 cell');
+                    this.moveSelectedPieceOneCell(0, 1);
+                } else {
+                    console.log('No piece selected! Click on a piece first.');
+                    this.showMessage('Selecciona una pieza primero');
+                }
             }
-        }
-        
-        // R key to rotate selected piece
-        if (Phaser.Input.Keyboard.JustDown(this.input.keyboard.addKey('R'))) {
-            if (this.selectedPiece) {
-                console.log('R key pressed, rotating selected piece');
-                this.rotateSelectedPiece();
-            } else {
-                console.log('No piece selected! Click on a piece first.');
-                this.showMessage('Selecciona una pieza primero');
+            
+            if (Phaser.Input.Keyboard.JustDown(this.cursors.up)) {
+                if (this.selectedPiece) {
+                    console.log('Up arrow pressed, moving selected piece up by 1 cell');
+                    this.moveSelectedPieceOneCell(0, -1);
+                } else {
+                    console.log('No piece selected! Click on a piece first.');
+                    this.showMessage('Selecciona una pieza primero');
+                }
+            }
+            
+            // R key to rotate selected piece
+            if (Phaser.Input.Keyboard.JustDown(this.input.keyboard.addKey('R'))) {
+                if (this.selectedPiece) {
+                    console.log('R key pressed, rotating selected piece');
+                    this.rotateSelectedPiece();
+                } else {
+                    console.log('No piece selected! Click on a piece first.');
+                    this.showMessage('Selecciona una pieza primero');
+                }
             }
         }
         
         // ESC key to deselect piece
         if (Phaser.Input.Keyboard.JustDown(this.input.keyboard.addKey('ESC'))) {
             this.deselectPiece();
+        }
+        
+        // SPACE key - priority: confirm selected piece, then floating, else spawn
+        if (Phaser.Input.Keyboard.JustDown(this.input.keyboard.addKey('SPACE'))) {
+            if (this.selectedPiece) {
+                // Confirm current selected piece placement and deselect
+                console.log('Space pressed, confirming selected piece');
+                this.confirmInitialPosition();
+            } else if (this.isFloatingMode && this.floatingPiece) {
+                // Confirm floating piece position
+                console.log('Space pressed, trying to consolidate floating piece');
+                if (this.tryConsolidateFloatingPiece()) {
+                    this.showMessage('Pieza confirmada - ESPACIO de nuevo para nueva pieza');
+                } else {
+                    this.showMessage('No se puede confirmar - posición inválida');
+                }
+            } else {
+                // No selected and no floating piece, spawn new one
+                console.log('Space pressed, spawning new floating piece');
+                this.spawnNewPiece();
+            }
         }
         
         // M key to manually test merging
@@ -978,17 +1418,12 @@ class GameScene extends Phaser.Scene {
         
         console.log(`Found ${mergeGroups.length} merge groups`);
         
-        // Process the first merge group with animation
+    // Process the first merge group with animation
         const group = mergeGroups[0];
+    // Show arcade FX for the merge
+    try { this.playMergeFX(group); } catch (e) {}
         console.log(`🔥 MERGING group: ${group.length} pieces of color ${group[0].color.toString(16)}`);
         group.forEach(p => console.log(`   - ${p.type}(${p.id}) at (${p.x},${p.y})`));
-        
-        // Count total cells before merging
-        let totalCellsBeforeMerge = 0;
-        group.forEach(piece => {
-            const cells = this.getPieceCells(piece);
-            totalCellsBeforeMerge += cells.length;
-        });
         
         // Create merge animation before removing pieces
         this.animateMerge(group, () => {
@@ -1019,111 +1454,25 @@ class GameScene extends Phaser.Scene {
             this.pieces.push(mergedPiece);
             this.placePieceOnGrid(mergedPiece);
             
-            // Calculate cells eliminated in merging process
-            const cellsAfterMerge = mergedPiece.cells.length;
-            const cellsEliminated = totalCellsBeforeMerge - cellsAfterMerge;
-            
-            // Add score for eliminated cells (overlapping cells that were removed)
-            if (cellsEliminated > 0) {
-                this.addScore(cellsEliminated * 1, `${cellsEliminated} celdas fusionadas`);
-            }
-            
-            console.log(`✅ Created merged piece ${mergedPiece.id} with ${mergedPiece.cells.length} cells (eliminated ${cellsEliminated} overlapping cells)`);
+            console.log(`✅ Created merged piece ${mergedPiece.id} with ${mergedPiece.cells.length} cells`);
             
             // Re-render grid after merge
             this.renderGrid();
             
-            // Continue processing remaining merge groups after a short delay
-            setTimeout(() => {
-                this.processMergeGroups(onComplete);
-            }, 200);
+            // Add a safety check to prevent infinite loops
+            const newMergeGroups = this.findMergeGroups();
+            if (newMergeGroups.length > 0 && newMergeGroups.length < mergeGroups.length) {
+                // Continue processing only if we actually reduced the number of merge groups
+                setTimeout(() => {
+                    this.processMergeGroups(onComplete);
+                }, 200);
+            } else {
+                // Stop if no progress is being made to prevent infinite loops
+                console.log('⚠️ Stopping merge processing to prevent infinite loop');
+                this.isAnimationPlaying = false;
+                this.checkAndClearRectangles(false, onComplete);
+            }
         });
-    }
-    
-    checkAndMergeSameColorPiecesOld() {
-        console.log('=== Checking for same color piece merging ===');
-        console.log(`Current pieces before merging: ${this.pieces.length}`);
-        this.pieces.forEach(p => console.log(`  - ${p.type}(${p.id}) at (${p.x},${p.y}) color:${p.color.toString(16)}`));
-        
-        let hasMerged = false;
-        
-        // Keep merging until no more merges are possible
-        while (true) {
-            const mergeGroups = this.findMergeGroups();
-            
-            if (mergeGroups.length === 0) {
-                break; // No more merges possible
-            }
-            
-            console.log(`Found ${mergeGroups.length} merge groups`);
-            
-            // Process each merge group with animation
-            mergeGroups.forEach((group, index) => {
-                console.log(`🔥 MERGING group ${index + 1}: ${group.length} pieces of color ${group[0].color.toString(16)}`);
-                group.forEach(p => console.log(`   - ${p.type}(${p.id}) at (${p.x},${p.y})`));
-                
-                // Count total cells before merging
-                let totalCellsBeforeMerge = 0;
-                group.forEach(piece => {
-                    const cells = this.getPieceCells(piece);
-                    totalCellsBeforeMerge += cells.length;
-                });
-                
-                // Create merge animation before removing pieces
-                this.animateMerge(group, () => {
-                    // Remove original pieces from grid
-                    group.forEach(piece => {
-                        this.removePieceFromGrid(piece);
-                    });
-                    
-                    // Remove original pieces from pieces array
-                    group.forEach(piece => {
-                        const index = this.pieces.findIndex(p => p.id === piece.id);
-                        if (index !== -1) {
-                            this.pieces.splice(index, 1);
-                        }
-                    });
-                    
-                    // Create merged piece
-                    const mergedPiece = this.createMergedPiece(group);
-                    this.pieces.push(mergedPiece);
-                    this.placePieceOnGrid(mergedPiece);
-                    
-                    // Calculate cells eliminated in merging process
-                    const cellsAfterMerge = mergedPiece.cells.length;
-                    const cellsEliminated = totalCellsBeforeMerge - cellsAfterMerge;
-                    
-                    // Add score for eliminated cells (overlapping cells that were removed)
-                    if (cellsEliminated > 0) {
-                        this.addScore(cellsEliminated * 1, `${cellsEliminated} celdas fusionadas`);
-                    }
-                    
-                    console.log(`✅ Created merged piece ${mergedPiece.id} with ${mergedPiece.cells.length} cells (eliminated ${cellsEliminated} overlapping cells)`);
-                    
-                    // Re-render grid after merge
-                    this.renderGrid();
-                });
-            });
-            
-            hasMerged = true;
-            this.renderGrid();
-        }
-        
-        if (hasMerged) {
-            console.log(`✅ Merging complete. Final pieces: ${this.pieces.length}`);
-            this.pieces.forEach(p => console.log(`  - ${p.type}(${p.id}) at (${p.x},${p.y}) color:${p.color.toString(16)}`));
-            
-            // IMPORTANT: Lose focus when pieces merge
-            if (this.selectedPiece) {
-                console.log('Pieces merged - deselecting piece to lose focus');
-                this.deselectPiece();
-                this.showMessage('Piezas fusionadas - pieza deseleccionada');
-            }
-        } else {
-            console.log('❌ No pieces to merge found');
-        }
-        
-        console.log('=== End piece merging check ===');
     }
     
     animateMerge(piecesToMerge, onComplete) {
@@ -1733,7 +2082,7 @@ class GameScene extends Phaser.Scene {
         // Check if any piece can be placed anywhere on the grid
         if (!this.canPlaceAnyPiece()) {
             console.log('Game over - no space for any pieces');
-            this.gameOver();
+            this.gameOver('no hay espacio para ninguna pieza');
             return;
         }
         
@@ -1771,7 +2120,7 @@ class GameScene extends Phaser.Scene {
         const validPositions = [];
         for (let row = 0; row < this.gridHeight; row++) {
             for (let col = 0; col < this.gridWidth; col++) {
-                const piece = {
+                const testPiece = {
                     id: this.nextPieceId,
                     type: type,
                     x: col,
@@ -1780,7 +2129,7 @@ class GameScene extends Phaser.Scene {
                     rotatedShape: template.shape
                 };
                 
-                if (this.canPlacePieceAt(piece, col, row)) {
+                if (this.canPlacePieceAt(testPiece, col, row)) {
                     validPositions.push({row, col});
                 }
             }
@@ -1818,16 +2167,18 @@ class GameScene extends Phaser.Scene {
             
             for (let row = 0; row < this.gridHeight; row++) {
                 for (let col = 0; col < this.gridWidth; col++) {
-                    const testPiece = {
-                        id: -1, // Temporary ID for testing
-                        type: type,
-                        x: col,
-                        y: row,
-                        color: template.color
-                    };
-                    
-                    if (this.canPlacePieceAt(testPiece, col, row)) {
-                        return true; // Found at least one valid placement
+                    for (let rot = 0; rot < 4; rot++) {
+                        const testPiece = {
+                            id: -1, // Temporary ID for testing
+                            type: type,
+                            x: col,
+                            y: row,
+                            rotation: rot,
+                            color: template.color
+                        };
+                        if (this.canPlacePieceAt(testPiece, col, row)) {
+                            return true; // Found at least one valid placement
+                        }
                     }
                 }
             }
@@ -1875,8 +2226,8 @@ class GameScene extends Phaser.Scene {
         }
         
         // If we can't place even a single block, game over
-        console.log('Game over - cannot place even single blocks');
-        this.gameOver();
+    console.log('Game over - cannot place even single blocks');
+    this.gameOver('no se puede colocar ni un bloque');
     }
     
     // Remove methods related to current piece rendering
@@ -1899,6 +2250,12 @@ class GameScene extends Phaser.Scene {
         }
         
         console.log(`Rotating selected piece ${this.selectedPiece.id} of type ${this.selectedPiece.type}`);
+        // Ensure rotation counter exists
+        if (typeof this.selectedPiece.rotation !== 'number') this.selectedPiece.rotation = 0;
+        // Start-of-cycle snapshot when leaving rotation 0
+        if (this.selectedPiece.rotation % 4 === 0 && !this.selectedPiece._rotationCycleStart) {
+            this.selectedPiece._rotationCycleStart = { x: this.selectedPiece.x, y: this.selectedPiece.y };
+        }
         
         // Remove piece from grid temporarily
         this.removePieceFromGrid(this.selectedPiece);
@@ -1913,30 +2270,39 @@ class GameScene extends Phaser.Scene {
         
         console.log(`Shape after rotation:`, rotatedShape);
         
-        // Create a test piece with the rotated shape
-        const testPiece = {
-            ...this.selectedPiece,
-            rotatedShape: rotatedShape
-        };
-        
-        // Check if the rotated piece fits in the current position
-        if (this.canPlacePieceAt(testPiece, this.selectedPiece.x, this.selectedPiece.y)) {
-            // Rotation successful - immediately consume 1 point
-            this.selectedPiece.rotatedShape = rotatedShape;
-            this.placePieceOnGrid(this.selectedPiece);
-            
-            // Consume 1 point for the rotation
-            this.addScore(-1, 'rotación');
-            
-            console.log(`Successfully rotated piece ${this.selectedPiece.id}`);
-            console.log(`New rotated shape stored:`, this.selectedPiece.rotatedShape);
-            
-            // Update highlighting for new shape
+        // Compute world center and try center-aligned placement with wall-kicks
+        const prevCenter = this.computePieceWorldCenter(this.selectedPiece);
+        const candidates = this.getCenterAlignedCandidates(prevCenter, rotatedShape);
+        let placed = false;
+        for (const cand of candidates) {
+            const testPiece = { ...this.selectedPiece, x: cand.x, y: cand.y, rotatedShape };
+            if (this.canPlacePieceAt(testPiece, cand.x, cand.y)) {
+                this.selectedPiece.x = cand.x;
+                this.selectedPiece.y = cand.y;
+                this.selectedPiece.rotatedShape = rotatedShape;
+                this.placePieceOnGrid(this.selectedPiece);
+                this.addScore(-1, 'rotación');
+                this.selectedPiece.rotation = (this.selectedPiece.rotation + 1) % 4;
+                placed = true;
+                break;
+            }
+        }
+        if (placed) {
+            console.log(`Successfully rotated piece ${this.selectedPiece.id} around center with wall-kicks`);
+            // If completed a full cycle, try to snap back to the original position
+            if (this.selectedPiece.rotation % 4 === 0 && this.selectedPiece._rotationCycleStart) {
+                const start = this.selectedPiece._rotationCycleStart;
+                const snapTest = { ...this.selectedPiece, x: start.x, y: start.y };
+                if (this.canPlacePieceAt(snapTest, start.x, start.y)) {
+                    this.selectedPiece.x = start.x;
+                    this.selectedPiece.y = start.y;
+                    this.placePieceOnGrid(this.selectedPiece);
+                    console.log('Snapped back to original position after 360° rotation');
+                }
+                this.selectedPiece._rotationCycleStart = null;
+            }
             this.highlightSelectedPiece();
-            
-            // Re-render grid (merge check happens only when focus is lost)
             this.renderGrid();
-            
         } else {
             // Rotation failed - put piece back with original shape, no point cost
             this.placePieceOnGrid(this.selectedPiece);
@@ -1958,6 +2324,44 @@ class GameScene extends Phaser.Scene {
         }
         
         return rotated;
+    }
+
+    // ===== Rotation helpers around center of mass =====
+    // Compute center of mass (average of cell centers) in local shape coords
+    computeShapeCenter(shape) {
+        let sumX = 0, sumY = 0, count = 0;
+        for (let r = 0; r < shape.length; r++) {
+            for (let c = 0; c < shape[r].length; c++) {
+                if (shape[r][c]) {
+                    sumX += c + 0.5;
+                    sumY += r + 0.5;
+                    count++;
+                }
+            }
+        }
+        if (count === 0) return { cx: 0, cy: 0 };
+        return { cx: sumX / count, cy: sumY / count };
+    }
+
+    // Compute world center of mass of a piece using its current shape
+    computePieceWorldCenter(piece) {
+        const shape = this.getPieceShape(piece);
+        const localCenter = this.computeShapeCenter(shape);
+        return { x: piece.x + localCenter.cx, y: piece.y + localCenter.cy };
+    }
+
+    // Given a previous world center and a rotated shape, propose candidate positions (with small wall-kicks)
+    getCenterAlignedCandidates(prevCenter, rotatedShape) {
+        const newLocal = this.computeShapeCenter(rotatedShape);
+        const baseX = Math.round(prevCenter.x - newLocal.cx);
+        const baseY = Math.round(prevCenter.y - newLocal.cy);
+        const kicks = [
+            [0, 0],
+            [-1, 0], [1, 0], [0, -1], [0, 1],
+            [-1, -1], [1, -1], [-1, 1], [1, 1],
+            [-2, 0], [2, 0], [0, -2], [0, 2]
+        ];
+        return kicks.map(([dx, dy]) => ({ x: baseX + dx, y: baseY + dy }));
     }
     
     // Confirm the temporary movement/rotation
@@ -2104,7 +2508,7 @@ class GameScene extends Phaser.Scene {
         this.updateNextPieceDisplay();
     }
     
-    // Spawn next piece randomly from queue
+    // Spawn next piece randomly from queue as floating (must confirm)
     spawnNextPieceRandomly() {
         if (this.nextPieces.length === 0) {
             this.generateNextPieces();
@@ -2114,61 +2518,34 @@ class GameScene extends Phaser.Scene {
         const nextPieceData = this.nextPieces.shift();
         this.generateNextPieces(); // Refill queue
         
-        // Try to find a valid position for this piece
-        const validPositions = [];
-        for (let row = 0; row < this.gridHeight; row++) {
-            for (let col = 0; col < this.gridWidth; col++) {
-                const testPiece = {
-                    id: this.nextPieceId,
-                    type: nextPieceData.type,
-                    x: col,
-                    y: row,
-                    color: nextPieceData.template.color,
-                    rotatedShape: nextPieceData.template.shape
-                };
-                
-                if (this.canPlacePieceAt(testPiece, col, row)) {
-                    validPositions.push({row, col});
-                }
+        // Create floating piece with rotated shape
+        const centerX = Math.floor(this.gridWidth / 2);
+        const centerY = Math.floor(this.gridHeight / 2);
+        const piece = {
+            id: this.nextPieceId++,
+            type: nextPieceData.type,
+            x: centerX,
+            y: centerY,
+            color: nextPieceData.template.color,
+            rotatedShape: nextPieceData.template.shape,
+            rotation: 0
+        };
+        
+        // If center invalid, find a nearby valid position
+        if (!this.isFloatingPositionValid(piece, piece.x, piece.y)) {
+            const pos = this.findGoodSpawnPosition(piece.type);
+            if (pos) {
+                piece.x = pos.x;
+                piece.y = pos.y;
+                if (typeof pos.rotation === 'number') piece.rotation = pos.rotation;
             }
         }
         
-        if (validPositions.length > 0) {
-            // Choose random valid position
-            const randomPos = validPositions[Math.floor(Math.random() * validPositions.length)];
-            const piece = {
-                id: this.nextPieceId++,
-                type: nextPieceData.type,
-                x: randomPos.col,
-                y: randomPos.row,
-                color: nextPieceData.template.color,
-                rotatedShape: nextPieceData.template.shape
-            };
-            
-            this.pieces.push(piece);
-            this.placePieceOnGrid(piece);
-            this.renderGrid();
-            
-            console.log(`Spawned ${nextPieceData.type} piece at position (${randomPos.row}, ${randomPos.col})`);
-            
-            // Automatically select the newly spawned piece
-            this.selectPiece(piece);
-            console.log(`Automatically selected new piece ${piece.type}(${piece.id})`);
-            
-            // Show message about new piece with immediate movement system
-            this.showMessage(`Nueva pieza ${piece.type} seleccionada - usa flechas para mover (-1 pt)`);
-            
-            // Validate game state after spawning
-            this.validateGameState();
-            
-            // DON'T check for merging or line clearing until position is confirmed
-            // Only validate that piece was placed correctly
-            console.log('New piece spawned and selected - move and confirm position to trigger merging/line clearing');
-        } else {
-            // No valid positions - game over
-            console.log('Game over - no space for next piece');
-            this.gameOver();
-        }
+        // Set as floating
+        this.floatingPiece = piece;
+        this.isFloatingMode = true;
+        this.renderGrid();
+        this.showMessage(`Pieza ${piece.type} flotante - ESPACIO para confirmar`);
     }
     
     // Update next piece display
@@ -2219,118 +2596,126 @@ class GameScene extends Phaser.Scene {
         if (piece.rotatedShape) {
             return piece.rotatedShape;
         }
+        
+        // Handle rotation for floating pieces using rotation property
+        if (piece.rotation && piece.rotation > 0) {
+            const template = this.pieceTemplates[piece.type];
+            if (template && template.shape) {
+                let shape = template.shape;
+                // Apply rotation the specified number of times
+                for (let i = 0; i < piece.rotation; i++) {
+                    shape = this.rotateMatrix(shape);
+                }
+                return shape;
+            }
+        }
+        
         const template = this.pieceTemplates[piece.type];
         return template ? template.shape : [];
     }
     
     // Get all cells occupied by a piece (handles both regular pieces and fragments)
-    getPieceCells(piece) {
-        const cells = [];
-        
-        if (piece.type === 'FRAGMENT') {
-            // For fragment pieces, use stored cell positions
-            piece.cells.forEach(relativeCell => {
-                cells.push({
-                    row: piece.y + relativeCell.row,
-                    col: piece.x + relativeCell.col
-                });
-            });
-        } else {
-            // For regular pieces, calculate from shape
-            const shape = this.getPieceShape(piece);
-            for (let row = 0; row < shape.length; row++) {
-                for (let col = 0; col < shape[row].length; col++) {
-                    if (shape[row][col]) {
-                        cells.push({
-                            row: piece.y + row,
-                            col: piece.x + col
-                        });
-                    }
-                }
-            }
-        }
-        
-        return cells;
-    }
-    
-    
-    // Remove hardDrop and placePiece methods as they're no longer needed
-    
+    // Override renderGrid to handle floating pieces and avoid missing-piece fallbacks
     renderGrid() {
         if (!this.gridGraphics || !this.gridGraphics.children) return;
         
+        // 1) Reset all cells to empty
         this.gridGraphics.children.entries.forEach(cell => {
-            const row = cell.getData('row');
-            const col = cell.getData('col');
-            
-            if (this.grid[row][col]) {
-                // Find the piece that owns this cell
-                const pieceId = this.grid[row][col];
-                const piece = this.pieces.find(p => p.id === pieceId);
-                if (piece) {
-                    // Use appropriate texture based on piece type
-                    if (piece.type === 'FRAGMENT') {
-                        // Use color-specific fragment texture
-                        const fragmentTextureKey = `tile_FRAGMENT_${piece.color.toString(16)}`;
-                        if (this.textures.exists(fragmentTextureKey)) {
-                            cell.setTexture(fragmentTextureKey);
-                        } else {
-                            // Fallback to generic fragment with tint
-                            cell.setTexture('tile_FRAGMENT');
-                            cell.setTint(piece.color);
+            if (cell.floatingTween) {
+                cell.floatingTween.destroy();
+                cell.floatingTween = null;
+            }
+            cell.setTexture('empty_cell');
+            cell.setAlpha(1.0);
+            cell.clearTint();
+            cell.setScale(1, 1);
+        });
+        
+        // Helper to get a cell object quickly
+        const getCellObj = (row, col) => {
+            return this.gridGraphics.children.entries.find(c => c.getData('row') === row && c.getData('col') === col);
+        };
+        
+        // 2) Draw all placed pieces directly from this.pieces
+        for (const piece of this.pieces) {
+            const shape = this.getPieceShape(piece);
+            if (piece.type === 'FRAGMENT') {
+                // Use stored relative cells
+                for (const rel of piece.cells) {
+                    const r = piece.y + rel.row;
+                    const c = piece.x + rel.col;
+                    if (r >= 0 && r < this.gridHeight && c >= 0 && c < this.gridWidth) {
+                        const cell = getCellObj(r, c);
+                        if (cell) {
+                            const fragmentTextureKey = `tile_FRAGMENT_${piece.color.toString(16)}`;
+                            if (this.textures.exists(fragmentTextureKey)) {
+                                cell.setTexture(fragmentTextureKey);
+                            } else {
+                                cell.setTexture('tile_FRAGMENT');
+                            }
+                            cell.setAlpha(1.0);
                         }
-                    } else {
-                        cell.setTexture(`tile_${piece.type}`);
                     }
-                    
-                    // Clear tint for non-fragment pieces
-                    if (piece.type !== 'FRAGMENT') {
-                        cell.clearTint();
-                    }
-                    
-                    cell.setAlpha(1);
-                } else {
-                    // Fallback if piece not found - this shouldn't happen
-                    console.warn(`Piece with ID ${pieceId} not found for cell (${row}, ${col})`);
-                    cell.setTexture('empty_cell');
-                    cell.clearTint();
-                    cell.setAlpha(1);
                 }
             } else {
-                // Empty cell - use default texture
-                cell.setTexture('empty_cell');
-                cell.clearTint();
-                cell.setAlpha(1);
-            }
-        });
-        
-        // Log grid state for debugging
-        console.log('Grid state:');
-        for (let row = 0; row < this.gridHeight; row++) {
-            let rowString = '';
-            for (let col = 0; col < this.gridWidth; col++) {
-                rowString += this.grid[row][col] ? '■' : '□';
-            }
-            console.log(`Row ${row}: ${rowString}`);
-        }
-        
-        console.log('Active pieces:', this.pieces.map(p => `${p.type}(${p.id}) at (${p.x},${p.y})`));
-        
-        // Verify grid consistency
-        let gridCellCount = 0;
-        for (let row = 0; row < this.gridHeight; row++) {
-            for (let col = 0; col < this.gridWidth; col++) {
-                if (this.grid[row][col]) gridCellCount++;
+                // Use shape
+                for (let r = 0; r < shape.length; r++) {
+                    for (let c = 0; c < shape[r].length; c++) {
+                        if (shape[r][c]) {
+                            const absR = piece.y + r;
+                            const absC = piece.x + c;
+                            if (absR >= 0 && absR < this.gridHeight && absC >= 0 && absC < this.gridWidth) {
+                                const cell = getCellObj(absR, absC);
+                                if (cell) {
+                                    cell.setTexture(`tile_${piece.type}`);
+                                    cell.setAlpha(1.0);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         
-        let pieceCellCount = 0;
-        this.pieces.forEach(piece => {
-            pieceCellCount += this.getPieceCells(piece).length;
-        });
-        
-        if (gridCellCount !== pieceCellCount) {
-            console.warn(`Grid inconsistency: ${gridCellCount} cells in grid vs ${pieceCellCount} cells in pieces`);
+        // 3) Draw floating piece on top (semi-transparent + pulsing)
+        if (this.floatingPiece) {
+            const fp = this.floatingPiece;
+            const shape = this.getPieceShape(fp);
+            for (let r = 0; r < shape.length; r++) {
+                for (let c = 0; c < shape[r].length; c++) {
+                    if (shape[r][c]) {
+                        const absR = fp.y + r;
+                        const absC = fp.x + c;
+                        const inBounds = (absR >= 0 && absR < this.gridHeight && absC >= 0 && absC < this.gridWidth);
+                        if (inBounds) {
+                            const cell = getCellObj(absR, absC);
+                            if (cell) {
+                                let textureKey;
+                                if (fp.type === 'FRAGMENT') {
+                                    textureKey = `tile_FRAGMENT_${fp.color.toString(16)}`;
+                                    if (!this.textures.exists(textureKey)) textureKey = 'tile_FRAGMENT';
+                                } else {
+                                    textureKey = `tile_${fp.type}`;
+                                }
+                                cell.setTexture(textureKey);
+                                cell.setAlpha(0.7);
+                                // Tint only colliding cells (occupied grid)
+                                const collides = this.grid[absR][absC] !== 0;
+                                if (collides) cell.setTint(0xff4444);
+                                if (!cell.floatingTween) {
+                                    cell.floatingTween = this.tweens.add({
+                                        targets: cell,
+                                        alpha: 0.4,
+                                        duration: 800,
+                                        yoyo: true,
+                                        repeat: -1
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     
@@ -2339,6 +2724,7 @@ class GameScene extends Phaser.Scene {
         
         if (linesToClear.length > 0) {
             console.log(`Found ${linesToClear.length} complete lines to clear: ${linesToClear.join(', ')}`);
+            this.playLineClearFX(linesToClear);
             
             // Clear lines immediately for merge checking
             this.clearLines(linesToClear);
@@ -2376,34 +2762,19 @@ class GameScene extends Phaser.Scene {
             this.pendingLineCallback = onComplete;
         }
         
-        // Print current grid state for debugging
-        console.log('Current grid state:');
-        for (let row = 0; row < this.gridHeight; row++) {
-            let rowString = '';
-            let cellCount = 0;
-            for (let col = 0; col < this.gridWidth; col++) {
-                if (this.grid[row][col] !== 0) {
-                    rowString += '■';
-                    cellCount++;
-                } else {
-                    rowString += '□';
-                }
-            }
-            console.log(`Row ${row}: ${rowString} (${cellCount}/${this.gridWidth} cells)`);
-        }
-        
         const linesToClear = this.findCompleteLines();
         
         if (linesToClear.length > 0) {
             console.log(`Found ${linesToClear.length} complete lines to clear: ${linesToClear.join(', ')}`);
+            this.playLineClearFX(linesToClear);
             
             // Block actions only on the first call (not recursive calls)
             if (!isRecursiveCall) {
                 this.isAnimationPlaying = true;
             }
             
-            // Show flashing animation on completed lines before clearing them
-            this.showLineCompletionAnimation(linesToClear, () => {
+            // Show simple flash animation and clear immediately
+            this.showSimpleLineAnimation(linesToClear, () => {
                 // Remove lines from pieces and grid AFTER animation
                 this.clearLines(linesToClear);
                 
@@ -2421,7 +2792,6 @@ class GameScene extends Phaser.Scene {
                         totalCells += this.gridHeight; // Full column
                     }
                 });
-                // Note: Points for cleared cells are already added in clearLines()
                 this.linesCleared += linesToClear.length;
                 
                 // Level up every 5 lines cleared
@@ -2431,11 +2801,8 @@ class GameScene extends Phaser.Scene {
                 
                 this.updateScoreDisplay();
                 
-                // Create particle effect
-                this.createClearEffect(linesToClear);
-                
-                // Check for more lines after clearing (chain reactions) with longer delay
-                setTimeout(() => this.checkAndClearRectangles(true), 1500); // Increased from 500 to 1500ms
+                // Check for more lines after clearing (chain reactions) with shorter delay
+                setTimeout(() => this.checkAndClearRectangles(true), 300);
             });
         } else {
             console.log('No complete lines found');
@@ -2444,22 +2811,110 @@ class GameScene extends Phaser.Scene {
             // No lines to clear, make sure grid is properly rendered
             this.renderGrid();
             
-            // Execute callback if this is the end of the entire chain reaction
-            if (this.pendingLineCallback && typeof this.pendingLineCallback === 'function') {
-                console.log('Executing pending callback after complete line chain reaction');
+            // Call the original pending callback if this is the end of a chain
+            if (this.pendingLineCallback) {
                 const callback = this.pendingLineCallback;
-                this.pendingLineCallback = null; // Clear the stored callback
+                this.pendingLineCallback = null;
                 callback();
             }
         }
+    }
+    
+    showSimpleLineAnimation(linesToClear, onComplete) {
+        console.log('🎬 Starting simple line clear animation...');
         
-        console.log('=== Line check complete ===');
+        // Create flash effects for completed lines
+        const flashElements = [];
+        
+        linesToClear.forEach(line => {
+            if (line.type === 'row') {
+                // Flash entire row
+                for (let col = 0; col < this.gridWidth; col++) {
+                    const cell = this.getCellAt(line.index, col);
+                    if (cell) {
+                        // Create bright flash overlay
+                        const flash = this.add.rectangle(
+                            col * this.cellSize + this.cellSize / 2,
+                            line.index * this.cellSize + this.cellSize / 2,
+                            this.cellSize,
+                            this.cellSize,
+                            0xffffff,
+                            0.8
+                        );
+                        flashElements.push(flash);
+                    }
+                }
+            } else if (line.type === 'col') {
+                // Flash entire column
+                for (let row = 0; row < this.gridHeight; row++) {
+                    const cell = this.getCellAt(row, line.index);
+                    if (cell) {
+                        // Create bright flash overlay
+                        const flash = this.add.rectangle(
+                            line.index * this.cellSize + this.cellSize / 2,
+                            row * this.cellSize + this.cellSize / 2,
+                            this.cellSize,
+                            this.cellSize,
+                            0xffffff,
+                            0.8
+                        );
+                        flashElements.push(flash);
+                    }
+                }
+            }
+        });
+        
+        // Animate flash elements
+        flashElements.forEach(flash => {
+            this.tweens.add({
+                targets: flash,
+                alpha: 0,
+                scaleX: 1.2,
+                scaleY: 1.2,
+                duration: 400,
+                ease: 'Power2.easeOut',
+                onComplete: () => {
+                    if (flash && flash.destroy) {
+                        flash.destroy();
+                    }
+                }
+            });
+        });
+        
+        // Call completion callback after animation
+        setTimeout(() => {
+            console.log('🎬 Simple line animation complete');
+            if (onComplete) {
+                onComplete();
+            }
+        }, 400);
+    }
+    
+    getCellAt(row, col) {
+        // Helper method to get the visual cell at a grid position
+        if (!this.gridGraphics || !this.gridGraphics.children) return null;
+        
+        return this.gridGraphics.children.entries.find(cell => {
+            return cell.getData('row') === row && cell.getData('col') === col;
+        });
     }
     
     hasCompletedLines() {
         // Quick check if there are any completed lines without processing them
         const lines = this.findCompleteLines();
         return lines.length > 0;
+    }
+
+    // If score dropped to <= 0 during a move, wait for line/merge resolution, then decide
+    resolvePendingGameOver() {
+        if (!this.pendingGameOver) return;
+        if (this.score <= 0) {
+            this.gameOver('puntuación ≤ 0');
+        } else {
+            // Recovered points from lines/merges; cancel pending state
+            this.pendingGameOver = false;
+            console.log('Score recovered above 0 after resolution. Continuando…');
+        }
     }
     
     findCompleteLines() {
@@ -2610,8 +3065,7 @@ class GameScene extends Phaser.Scene {
             if (line.type === 'row') {
                 // Animate entire row
                 for (let col = 0; col < this.gridWidth; col++) {
-                    const cellIndex = line.index * this.gridWidth + col;
-                    const cell = this.gridGraphics.children.entries[cellIndex];
+                    const cell = this.getCellAt(line.index, col);
                     if (cell) {
                         originalCells.push({
                             cell: cell,
@@ -2626,8 +3080,7 @@ class GameScene extends Phaser.Scene {
             } else if (line.type === 'col') {
                 // Animate entire column
                 for (let row = 0; row < this.gridHeight; row++) {
-                    const cellIndex = row * this.gridWidth + line.index;
-                    const cell = this.gridGraphics.children.entries[cellIndex];
+                    const cell = this.getCellAt(row, line.index);
                     if (cell) {
                         originalCells.push({
                             cell: cell,
@@ -2906,6 +3359,10 @@ class GameScene extends Phaser.Scene {
                             color: piece.color,
                             cells: remainingCells
                         };
+                        
+                        // Ensure the texture for this color exists
+                        this.ensureFragmentTextureExists(fragmentPiece.color);
+                        
                         newFragmentPieces.push(fragmentPiece);
                     }
                     
@@ -3157,11 +3614,13 @@ class GameScene extends Phaser.Scene {
             minY = Math.min(minY, row);
             maxY = Math.max(maxY, row);
             
-            // Add adjacent cells (with bounds checking)
-            if (row - 1 >= 0) stack.push({row: row - 1, col});
-            if (row + 1 < this.gridHeight) stack.push({row: row + 1, col});
-            if (col - 1 >= 0) stack.push({row, col: col - 1});
-            if (col + 1 < this.gridWidth) stack.push({row, col: col + 1});
+            // Add adjacent cells to explore
+            stack.push(
+                {row: row - 1, col},
+                {row: row + 1, col},
+                {row, col: col - 1},
+                {row, col: col + 1}
+            );
         }
         
         // Convert to relative positions
@@ -3209,8 +3668,10 @@ class GameScene extends Phaser.Scene {
                         x: component.minX,
                         y: component.minY,
                         color: fragment.color,
-                        cells: component.relativeCells
+                        cells: component.cells
                     };
+                    // Ensure texture for this color exists to avoid blue fallback
+                    this.ensureFragmentTextureExists(newPiece.color);
                     
                     additionalPieces.push(newPiece);
                     console.log(`Created new separated piece ${newPiece.id} at (${newPiece.x}, ${newPiece.y}) with ${newPiece.cells.length} cells`);
@@ -3301,8 +3762,7 @@ class GameScene extends Phaser.Scene {
         }));
         
         return {
-            cells,
-            relativeCells,
+            cells: relativeCells,
             minX,
             minY,
             maxX,
@@ -3447,69 +3907,121 @@ class GameScene extends Phaser.Scene {
         return cells;
     }
     
-    // Remove gravity - pieces stay where they are placed
-    // applyGravity() method removed
-    
-    createClearEffect(lines) {
-        if (!this.add || !this.tweens) return;
+    // Override renderGrid to handle floating pieces and avoid missing-piece fallbacks
+    renderGrid() {
+        if (!this.gridGraphics || !this.gridGraphics.children) return;
         
-        lines.forEach(line => {
-            if (line.type === 'row') {
-                // Create effect for horizontal line
-                for (let col = 0; col < this.gridWidth; col++) {
-                    const x = col * this.cellSize + this.cellSize / 2;
-                    const y = line.index * this.cellSize + this.cellSize / 2;
-                    
-                    // Create particle effect with slower animation
-                    for (let i = 0; i < 8; i++) {
-                        const particle = this.add.circle(x, y, 4, 0xffd700);
-                        
-                        this.tweens.add({
-                            targets: particle,
-                            x: x + (Math.random() - 0.5) * 150,
-                            y: y + (Math.random() - 0.5) * 150,
-                            alpha: 0,
-                            scale: 0,
-                            duration: 1200, // Increased from 500 to 1200ms
-                            delay: i * 50, // Staggered animation
-                            onComplete: () => particle.destroy()
-                        });
+        // 1) Reset all cells to empty
+        this.gridGraphics.children.entries.forEach(cell => {
+            if (cell.floatingTween) {
+                cell.floatingTween.destroy();
+                cell.floatingTween = null;
+            }
+            cell.setTexture('empty_cell');
+            cell.setAlpha(1.0);
+            cell.clearTint();
+            cell.setScale(1, 1);
+        });
+        
+        // Helper to get a cell object quickly
+        const getCellObj = (row, col) => {
+            return this.gridGraphics.children.entries.find(c => c.getData('row') === row && c.getData('col') === col);
+        };
+        
+        // 2) Draw all placed pieces directly from this.pieces
+        for (const piece of this.pieces) {
+            const shape = this.getPieceShape(piece);
+            if (piece.type === 'FRAGMENT') {
+                // Use stored relative cells
+                for (const rel of piece.cells) {
+                    const r = piece.y + rel.row;
+                    const c = piece.x + rel.col;
+                    if (r >= 0 && r < this.gridHeight && c >= 0 && c < this.gridWidth) {
+                        const cell = getCellObj(r, c);
+                        if (cell) {
+                            const fragmentTextureKey = `tile_FRAGMENT_${piece.color.toString(16)}`;
+                            if (this.textures.exists(fragmentTextureKey)) {
+                                cell.setTexture(fragmentTextureKey);
+                            } else {
+                                cell.setTexture('tile_FRAGMENT');
+                            }
+                            cell.setAlpha(1.0);
+                        }
                     }
                 }
-            } else if (line.type === 'col') {
-                // Create effect for vertical line
-                for (let row = 0; row < this.gridHeight; row++) {
-                    const x = line.index * this.cellSize + this.cellSize / 2;
-                    const y = row * this.cellSize + this.cellSize / 2;
-                    
-                    // Create particle effect with slower animation
-                    for (let i = 0; i < 8; i++) {
-                        const particle = this.add.circle(x, y, 4, 0x32cd32);
-                        
-                        this.tweens.add({
-                            targets: particle,
-                            x: x + (Math.random() - 0.5) * 150,
-                            y: y + (Math.random() - 0.5) * 150,
-                            alpha: 0,
-                            scale: 0,
-                            duration: 1200, // Increased from 500 to 1200ms
-                            delay: i * 50, // Staggered animation
-                            onComplete: () => particle.destroy()
-                        });
+            } else {
+                // Use shape
+                for (let r = 0; r < shape.length; r++) {
+                    for (let c = 0; c < shape[r].length; c++) {
+                        if (shape[r][c]) {
+                            const absR = piece.y + r;
+                            const absC = piece.x + c;
+                            if (absR >= 0 && absR < this.gridHeight && absC >= 0 && absC < this.gridWidth) {
+                                const cell = getCellObj(absR, absC);
+                                if (cell) {
+                                    cell.setTexture(`tile_${piece.type}`);
+                                    cell.setAlpha(1.0);
+                                }
+                            }
+                        }
                     }
                 }
             }
-        });
+        }
+        
+        // 3) Draw floating piece on top (semi-transparent + pulsing)
+        if (this.floatingPiece) {
+            const fp = this.floatingPiece;
+            const shape = this.getPieceShape(fp);
+            for (let r = 0; r < shape.length; r++) {
+                for (let c = 0; c < shape[r].length; c++) {
+                    if (shape[r][c]) {
+                        const absR = fp.y + r;
+                        const absC = fp.x + c;
+                        const inBounds = (absR >= 0 && absR < this.gridHeight && absC >= 0 && absC < this.gridWidth);
+                        if (inBounds) {
+                            const cell = getCellObj(absR, absC);
+                            if (cell) {
+                                let textureKey;
+                                if (fp.type === 'FRAGMENT') {
+                                    textureKey = `tile_FRAGMENT_${fp.color.toString(16)}`;
+                                    if (!this.textures.exists(textureKey)) textureKey = 'tile_FRAGMENT';
+                                } else {
+                                    textureKey = `tile_${fp.type}`;
+                                }
+                                cell.setTexture(textureKey);
+                                cell.setAlpha(0.7);
+                                // Tint only colliding cells (occupied grid)
+                                const collides = this.grid[absR][absC] !== 0;
+                                if (collides) cell.setTint(0xff4444);
+                                if (!cell.floatingTween) {
+                                    cell.floatingTween = this.tweens.add({
+                                        targets: cell,
+                                        alpha: 0.4,
+                                        duration: 800,
+                                        yoyo: true,
+                                        repeat: -1
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
-    
-    updateScore() {
-        this.scoreElement.textContent = this.score;
-        this.levelElement.textContent = this.level;
-        this.linesElement.textContent = this.linesCleared;
-    }
-    
+
     startGame() {
-        this.gameState = 'playing';
+    // Hard cleanup before starting a new game
+    try { this.tweens.killAll(); } catch(e) {}
+    if (this.messageText && this.messageText.destroy) { this.messageText.destroy(); this.messageText = null; }
+    this.clearSelectionHighlights();
+    this.floatingPiece = null;
+    this.isFloatingMode = false;
+    this.pendingLineCallback = null;
+    if (this.modal) this.modal.classList.add('hidden');
+
+    this.gameState = 'playing';
         this.initializeGrid();
         this.pieces = [];
         this.nextPieces = [];
@@ -3517,24 +4029,25 @@ class GameScene extends Phaser.Scene {
         this.score = 20;
         this.level = 1;
         this.linesCleared = 0;
+    this.pendingGameOver = false;
         
         // Reset piece selection and clear any highlights
         this.selectedPiece = null;
         this.isIndividualMode = false;
-        this.clearSelectionHighlights();
+    this.clearSelectionHighlights();
         
         // Manual spawn mode - spawn timer not needed but kept for compatibility
         this.lastSpawnTime = 0;
         
-        this.updateScore();
+    this.updateScoreDisplay();
         
         // Generate initial next pieces
         this.generateNextPieces();
         
         if (this.gridGraphics) {
             this.renderGrid();
-            // Start with one piece placed randomly
-            this.spawnNextPieceRandomly();
+            // Do not auto-spawn; wait for SPACE
+            this.showMessage('Presiona ESPACIO para generar pieza');
         }
     }
     
@@ -3547,20 +4060,30 @@ class GameScene extends Phaser.Scene {
     }
     
     resetGame() {
-        this.gameState = 'waiting';
+    // Hard cleanup similar to startGame
+    try { this.tweens.killAll(); } catch(e) {}
+    if (this.messageText && this.messageText.destroy) { this.messageText.destroy(); this.messageText = null; }
+    this.clearSelectionHighlights();
+    this.floatingPiece = null;
+    this.isFloatingMode = false;
+    this.pendingLineCallback = null;
+    if (this.modal) this.modal.classList.add('hidden');
+
+    this.gameState = 'waiting';
         this.initializeGrid();
         this.pieces = [];
         this.nextPieceId = 1;
         this.score = 20; // Reset to initial score
         this.level = 1;
         this.linesCleared = 0;
+    this.pendingGameOver = false;
         
         // Reset piece selection and clear any highlights
         this.selectedPiece = null;
         this.isIndividualMode = false;
         this.clearSelectionHighlights();
         this.rectanglesCleared = 0;
-        this.updateScoreDisplay();
+    this.updateScoreDisplay();
         
         if (this.gridGraphics) {
             this.renderGrid();
@@ -3571,11 +4094,239 @@ class GameScene extends Phaser.Scene {
         this.showMessage('Presiona ESPACIO para generar pieza. Las fusiones ocurren al perder focus.');
     }
     
-    gameOver() {
+    gameOver(reason = '') {
         this.gameState = 'gameOver';
         this.finalScoreElement.textContent = this.score;
         this.finalLevelElement.textContent = this.level;
+        // Show reason if exists
+        if (this.modal) {
+            const reasonNode = this.modal.querySelector('.game-over-reason');
+            if (reasonNode) {
+                reasonNode.textContent = reason ? `Motivo: ${reason}` : '';
+                reasonNode.style.display = reason ? 'block' : 'none';
+            }
+        }
         this.modal.classList.remove('hidden');
+        console.log(`Game Over${reason ? ' - ' + reason : ''}`);
+    }
+    
+    // ===== FLOATING PIECE SYSTEM =====
+    
+    spawnNextPieceRandomlyAsFloating() {
+        // Get a random piece type and template
+        const type = this.pieceTypes[Math.floor(Math.random() * this.pieceTypes.length)];
+        const template = this.pieceTemplates[type];
+        
+        // Start at center of grid
+        const centerX = Math.floor(this.gridWidth / 2);
+        const centerY = Math.floor(this.gridHeight / 2);
+        
+        // Create floating piece object (do NOT add to pieces yet)
+        const piece = {
+            id: this.nextPieceId++,
+            type,
+            x: centerX,
+            y: centerY,
+            color: template.color,
+            rotation: 0
+        };
+        
+        // If center is invalid, try to find a nearby valid position
+        if (!this.isFloatingPositionValid(piece, piece.x, piece.y)) {
+            const test = { type, rotation: 0 };
+            const pos = this.findGoodSpawnPosition(type);
+            if (pos) {
+                piece.x = pos.x;
+                piece.y = pos.y;
+                if (typeof pos.rotation === 'number') piece.rotation = pos.rotation;
+            }
+        }
+        
+        // Set as floating piece
+        this.floatingPiece = piece;
+        this.isFloatingMode = true;
+        
+        console.log(`Spawned floating piece ${type}(${piece.id}) at (${piece.x}, ${piece.y})`);
+        
+        // Re-render grid to show the floating piece
+        this.renderGrid();
+    }
+    
+    moveFloatingPiece(deltaX, deltaY) {
+        if (!this.floatingPiece) return;
+        
+        const newX = this.floatingPiece.x + deltaX;
+        const newY = this.floatingPiece.y + deltaY;
+        
+        // Validate against bounds and collisions using the shape extents
+        if (this.isFloatingPositionValid(this.floatingPiece, newX, newY)) {
+            this.floatingPiece.x = newX;
+            this.floatingPiece.y = newY;
+            console.log(`Moved floating piece to (${newX}, ${newY})`);
+            // Cost per movement while placing a new piece
+            this.addScore(-1, 'movimiento (pieza nueva)');
+            this.renderGrid();
+        } else {
+            console.log(`Cannot move floating piece to (${newX}, ${newY}) - blocked or out of bounds`);
+            this.showMessage('Fuera de límites');
+        }
+    }
+    
+    moveFloatingPieceTo(row, col) {
+        if (!this.floatingPiece) return;
+        
+        // Validate target position with full shape
+        if (this.isFloatingPositionValid(this.floatingPiece, col, row)) {
+            this.floatingPiece.x = col;
+            this.floatingPiece.y = row;
+            console.log(`Moved floating piece to (${col}, ${row})`);
+            // Cost per movement while placing a new piece (pointer/touch)
+            this.addScore(-1, 'movimiento (pieza nueva)');
+            this.renderGrid();
+        } else {
+            console.log(`Cannot move floating piece to (${col}, ${row}) - blocked or out of bounds`);
+            this.showMessage('Fuera de límites');
+        }
+    }
+    
+    rotateFloatingPiece() {
+        if (!this.floatingPiece) return;
+        const fp = this.floatingPiece;
+        const originalRotation = fp.rotation;
+        if (typeof fp.rotation !== 'number') fp.rotation = 0;
+        // Start-of-cycle snapshot when leaving rotation 0
+        if (fp.rotation % 4 === 0 && !fp._rotationCycleStart) {
+            fp._rotationCycleStart = { x: fp.x, y: fp.y };
+        }
+        const newRotation = (fp.rotation + 1) % 4;
+        
+        // Compute rotated shape and try to keep the world center of mass
+        const prevCenter = this.computePieceWorldCenter(fp);
+        const testPiece = { ...fp, rotation: newRotation };
+        const rotatedShape = this.getPieceShape(testPiece);
+        const candidates = this.getCenterAlignedCandidates(prevCenter, rotatedShape);
+        
+        for (const cand of candidates) {
+            const candidatePiece = { ...testPiece, x: cand.x, y: cand.y };
+            if (this.isFloatingPositionValid(candidatePiece, cand.x, cand.y)) {
+                fp.rotation = newRotation;
+                fp.x = cand.x;
+                fp.y = cand.y;
+                console.log(`Rotated floating piece to rotation ${fp.rotation} with center alignment`);
+                // Cost per rotation while placing a new piece
+                this.addScore(-1, 'rotación (pieza nueva)');
+                // If completed a full cycle, try to snap back to the original position
+                if (fp.rotation % 4 === 0 && fp._rotationCycleStart) {
+                    const start = fp._rotationCycleStart;
+                    const snapTest = { ...fp, x: start.x, y: start.y };
+                    if (this.isFloatingPositionValid(snapTest, start.x, start.y)) {
+                        fp.x = start.x;
+                        fp.y = start.y;
+                        console.log('Snapped back to original floating position after 360° rotation');
+                    }
+                    fp._rotationCycleStart = null;
+                }
+                this.renderGrid();
+                return;
+            }
+        }
+        
+        // No valid candidate found, keep original rotation and position
+        fp.rotation = originalRotation;
+        this.showMessage('No se puede rotar - fuera de límites');
+    }
+    
+    // Visual feedback when attempting to place a floating piece
+    playPlacementFeedback(isValid) {
+        if (!this.floatingPiece || !this.gridGraphics) return;
+        const cells = this.getPieceCells(this.floatingPiece);
+        const entries = this.gridGraphics.children?.entries || [];
+        
+        cells.forEach(({row, col}) => {
+            if (row < 0 || row >= this.gridHeight || col < 0 || col >= this.gridWidth) return;
+            const cell = entries.find(c => c.getData('row') === row && c.getData('col') === col);
+            if (!cell) return;
+            
+            // Stop previous feedback tween if any
+            if (cell.feedbackTween) {
+                try { cell.feedbackTween.stop(); } catch (e) {}
+                cell.feedbackTween = null;
+            }
+            
+            if (isValid) {
+                // Green flash + gentle pop
+                cell.setTint(0x66ff66);
+                cell.feedbackTween = this.tweens.add({
+                    targets: cell,
+                    scaleX: 1.1,
+                    scaleY: 1.1,
+                    duration: 100,
+                    yoyo: true,
+                    repeat: 1,
+                    onComplete: () => {
+                        cell.clearTint();
+                        cell.setScale(1, 1);
+                        cell.feedbackTween = null;
+                    }
+                });
+            } else {
+                // Red shake
+                cell.setTint(0xff6666);
+                cell.feedbackTween = this.tweens.add({
+                    targets: cell,
+                    x: cell.x + 4,
+                    duration: 50,
+                    yoyo: true,
+                    repeat: 3,
+                    onComplete: () => {
+                        cell.clearTint();
+                        cell.feedbackTween = null;
+                    }
+                });
+            }
+        });
+    }
+    
+    tryConsolidateFloatingPiece() {
+        if (!this.floatingPiece) return true;
+        
+        console.log(`Attempting to consolidate floating piece at (${this.floatingPiece.x}, ${this.floatingPiece.y})`);
+        
+        // Check if the floating piece can be placed at its current position
+    const canPlace = this.canPlacePieceAt(this.floatingPiece, this.floatingPiece.x, this.floatingPiece.y);
+    // Visual feedback first (while still floating)
+    this.playPlacementFeedback(!!canPlace);
+    if (canPlace) {
+            // Keep a reference, then clear floating state
+            const pieceToConsolidate = this.floatingPiece;
+            this.floatingPiece = null;
+            this.isFloatingMode = false;
+            
+            // Add to pieces array first so renderGrid will draw it
+            this.pieces.push(pieceToConsolidate);
+            
+            // Occupy grid cells for collision logic
+            this.placePieceOnGrid(pieceToConsolidate);
+            
+            console.log('✅ Floating piece consolidated successfully');
+            this.showMessage('Pieza consolidada');
+            
+            // Re-render with the placed piece
+            this.renderGrid();
+            
+            // Run post-consolidation sequence (lines, merges, then spawn)
+            if (typeof this.performPostConsolidationChecks === 'function') {
+                this.performPostConsolidationChecks();
+            } else {
+                this.checkAndMergeSameColorPieces();
+            }
+            
+            return true;
+        } else {
+            console.log('❌ Cannot consolidate floating piece - position blocked');
+            this.showMessage('Posición bloqueada - mueve la pieza a un lugar válido');
+            return false;
+        }
     }
 }
 
