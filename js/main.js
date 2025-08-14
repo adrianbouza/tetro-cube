@@ -13,7 +13,7 @@ class GameScene extends Phaser.Scene {
         this.pieces = []; // Array to store active pieces with their positions
         this.nextPieceId = 1; // ID counter for pieces
         this.gameState = 'waiting'; // waiting, playing, paused, gameOver
-        this.score = 10; // Start with 10 points
+        this.score = 20; // Start with 20 points
         this.level = 1;
         this.linesCleared = 0;
         
@@ -22,6 +22,9 @@ class GameScene extends Phaser.Scene {
         this.isIndividualMode = false; // True when a piece is selected
         this.tempPosition = null; // Temporary position before confirmation
         this.isMovingPiece = false; // True when piece is in temporary move state
+        
+        // Animation blocking system
+        this.isAnimationPlaying = false; // Block all actions during animations
         
         // Next pieces system
         this.nextPieces = []; // Array of next 2 pieces
@@ -36,18 +39,18 @@ class GameScene extends Phaser.Scene {
         
         // Simplified 4-color system for better gameplay
         this.pieceTemplates = {
-            I: { shape: [[1,1,1,1]], color: 0xf2b179, textColor: 0xf9f6f2 }, // Orange - Color 1
-            O: { shape: [[1,1],[1,1]], color: 0xf67c5f, textColor: 0xf9f6f2 }, // Red-orange - Color 2
-            T: { shape: [[0,1,0],[1,1,1]], color: 0xedcf72, textColor: 0xf9f6f2 }, // Yellow - Color 3
-            S: { shape: [[0,1,1],[1,1,0]], color: 0xedc53f, textColor: 0xf9f6f2 }, // Gold - Color 4
-            Z: { shape: [[1,1,0],[0,1,1]], color: 0xf2b179, textColor: 0xf9f6f2 }, // Orange - Color 1 (same as I)
-            L: { shape: [[1,0,0],[1,1,1]], color: 0xf67c5f, textColor: 0xf9f6f2 }, // Red-orange - Color 2 (same as O)
-            J: { shape: [[0,0,1],[1,1,1]], color: 0xedcf72, textColor: 0xf9f6f2 }, // Yellow - Color 3 (same as T)
+            I: { shape: [[1,1,1,1]], color: 0xff0000, textColor: 0xffffff }, // Rojo - Color 1
+            O: { shape: [[1,1],[1,1]], color: 0x0000ff, textColor: 0xffffff }, // Azul - Color 2
+            T: { shape: [[0,1,0],[1,1,1]], color: 0x00ff00, textColor: 0x000000 }, // Verde - Color 3
+            S: { shape: [[0,1,1],[1,1,0]], color: 0xffff00, textColor: 0x000000 }, // Amarillo - Color 4
+            Z: { shape: [[1,1,0],[0,1,1]], color: 0xff0000, textColor: 0xffffff }, // Rojo - Color 1 (same as I)
+            L: { shape: [[1,0,0],[1,1,1]], color: 0x0000ff, textColor: 0xffffff }, // Azul - Color 2 (same as O)
+            J: { shape: [[0,0,1],[1,1,1]], color: 0x00ff00, textColor: 0x000000 }, // Verde - Color 3 (same as T)
             // Additional pieces for 7x7 grid - use the 4 colors
-            I3: { shape: [[1,1,1]], color: 0xedc53f, textColor: 0xf9f6f2 }, // Gold - Color 4 (same as S)
-            L2: { shape: [[1,0],[1,1]], color: 0xf2b179, textColor: 0xf9f6f2 }, // Orange - Color 1
+            I3: { shape: [[1,1,1]], color: 0xffff00, textColor: 0x000000 }, // Amarillo - Color 4 (same as S)
+            L2: { shape: [[1,0],[1,1]], color: 0xff0000, textColor: 0xffffff }, // Rojo - Color 1
             // Single blocks for easier gameplay
-            SINGLE: { shape: [[1]], color: 0xf67c5f, textColor: 0xf9f6f2 } // Red-orange - Color 2
+            SINGLE: { shape: [[1]], color: 0x0000ff, textColor: 0xffffff } // Azul - Color 2
         };
         
         this.pieceTypes = Object.keys(this.pieceTemplates);
@@ -73,7 +76,19 @@ class GameScene extends Phaser.Scene {
             this.create2048StyleTile(type, piece.color, piece.textColor);
         });
         
-        // Create fragment tile texture (same as single block color system)
+        // Create fragment tile textures for each color
+        const colors = [
+            { color: 0xff0000, textColor: 0xffffff }, // Rojo
+            { color: 0x0000ff, textColor: 0xffffff }, // Azul  
+            { color: 0x00ff00, textColor: 0x000000 }, // Verde
+            { color: 0xffff00, textColor: 0x000000 }  // Amarillo
+        ];
+        
+        colors.forEach(colorData => {
+            this.create2048StyleTile(`FRAGMENT_${colorData.color.toString(16)}`, colorData.color, colorData.textColor, 'FRAG');
+        });
+        
+        // Create fallback generic fragment tile texture
         this.create2048StyleTile('FRAGMENT', this.pieceTemplates.SINGLE.color, this.pieceTemplates.SINGLE.textColor, 'FRAG');
         
         // Create empty grid cell texture with 2048 style
@@ -109,7 +124,7 @@ class GameScene extends Phaser.Scene {
         this.updateScoreDisplay();
         
         // Show initial instructions
-        this.showMessage('Haz clic en una pieza para seleccionarla. ENTER para confirmar movimiento.');
+        this.showMessage('Presiona ESPACIO para generar pieza. Las fusiones ocurren al perder focus.');
         
         // Don't spawn test pieces automatically - start with empty board
         // Players can use SPACE to spawn pieces or testScenario() functions
@@ -201,6 +216,12 @@ class GameScene extends Phaser.Scene {
     }
     
     handleCellClick(row, col) {
+        // Block selection during animations
+        if (this.isAnimationPlaying) {
+            this.showMessage('Espera a que termine la animación');
+            return;
+        }
+        
         console.log(`Cell clicked: (${row}, ${col})`);
         
         // Find piece at this position
@@ -223,29 +244,23 @@ class GameScene extends Phaser.Scene {
         
         this.selectedPiece = piece;
         this.isIndividualMode = true;
-        this.isMovingPiece = false; // Reset moving state
-        this.tempPosition = null; // Clear any temp position
         this.highlightSelectedPiece();
-        console.log(`Selected piece ${piece.type}(${piece.id}) - Use arrow keys to move, R to rotate, ENTER to confirm, ESC to deselect`);
+        console.log(`Selected piece ${piece.type}(${piece.id}) - Use arrow keys to move, R to rotate, ESC to deselect`);
         this.showMessage(`Pieza ${piece.type} seleccionada`);
     }
     
     deselectPiece() {
         if (this.selectedPiece) {
-            console.log(`Deselecting piece ${this.selectedPiece.type}(${this.selectedPiece.id})`);
-            
-            // If we were in the middle of moving, revert to original position
-            if (this.isMovingPiece && this.tempPosition) {
-                this.revertToOriginalPosition();
-            }
+            console.log(`Deselecting piece ${this.selectedPiece.type}(${this.selectedPiece.id}) - checking for merges and lines on focus loss`);
             
             this.selectedPiece = null;
             this.isIndividualMode = false;
-            this.isMovingPiece = false;
-            this.tempPosition = null;
             this.clearSelectionHighlights(); // Clear selection borders
-            this.showMessage('Pieza deseleccionada');
+            this.showMessage('Validando fusiones y líneas...');
             console.log('No piece selected - Click on a piece to select it');
+            
+            // Check for merges and lines when focus is lost
+            this.checkAndMergeSameColorPieces();
         }
     }
     
@@ -266,22 +281,20 @@ class GameScene extends Phaser.Scene {
                 const x = cell.col * this.cellSize;
                 const y = cell.row * this.cellSize;
                 
-                // Use different colors for temp vs confirmed position
-                const borderColor = this.isMovingPiece ? 0xff6600 : 0xffff00; // Orange for temp, yellow for selected
-                const borderWidth = this.isMovingPiece ? 6 : 4;
+                // Use yellow border for selected piece
+                const borderColor = 0xffff00; // Yellow for selected
+                const borderWidth = 4;
                 
                 const border = this.add.rectangle(x + this.cellSize/2, y + this.cellSize/2, 
                     this.cellSize - 2, this.cellSize - 2);
                 border.setStrokeStyle(borderWidth, borderColor);
                 border.setFillStyle(0x000000, 0); // Transparent fill
                 
-                // Add pulsing effect to the border (more intense for temp moves)
-                const minAlpha = this.isMovingPiece ? 0.5 : 0.3;
-                const maxAlpha = this.isMovingPiece ? 1.0 : 0.8;
+                // Add pulsing effect to the border
                 this.tweens.add({
                     targets: border,
-                    alpha: minAlpha,
-                    duration: this.isMovingPiece ? 300 : 500,
+                    alpha: 0.3,
+                    duration: 500,
                     yoyo: true,
                     repeat: -1
                 });
@@ -418,9 +431,9 @@ class GameScene extends Phaser.Scene {
         this.add.text(centerX + buttonSpacing * 2.5, controlPanelY, '+', { fontSize: '24px', fontFamily: 'Arial', color: '#ffffff' }).setOrigin(0.5);
         
         // Label descriptions
-        this.add.text(centerX - buttonSpacing * 2.5, controlPanelY - 25, 'CONFIRMAR', { fontSize: '10px', fontFamily: 'Arial', color: '#ffffff' }).setOrigin(0.5);
-        this.add.text(centerX - buttonSpacing * 2.5, controlPanelY + buttonSpacing * 2 + 25, 'CANCELAR', { fontSize: '10px', fontFamily: 'Arial', color: '#ffffff' }).setOrigin(0.5);
-        this.add.text(centerX + buttonSpacing * 2.5, controlPanelY + buttonSpacing + 25, 'ROTAR', { fontSize: '10px', fontFamily: 'Arial', color: '#ffffff' }).setOrigin(0.5);
+        this.add.text(centerX - buttonSpacing * 2.5, controlPanelY - 25, 'DESELECCIONAR', { fontSize: '10px', fontFamily: 'Arial', color: '#ffffff' }).setOrigin(0.5);
+        this.add.text(centerX - buttonSpacing * 2.5, controlPanelY + buttonSpacing * 2 + 25, 'DESELECCIONAR', { fontSize: '10px', fontFamily: 'Arial', color: '#ffffff' }).setOrigin(0.5);
+        this.add.text(centerX + buttonSpacing * 2.5, controlPanelY + buttonSpacing + 25, 'ROTAR (-1 PT)', { fontSize: '10px', fontFamily: 'Arial', color: '#ffffff' }).setOrigin(0.5);
         this.add.text(centerX + buttonSpacing * 2.5, controlPanelY - 25, 'NUEVA PIEZA', { fontSize: '10px', fontFamily: 'Arial', color: '#ffffff' }).setOrigin(0.5);
         
         // Add swipe gesture support
@@ -523,26 +536,15 @@ class GameScene extends Phaser.Scene {
     }
     
     handleMobileConfirm() {
-        if (this.selectedPiece && this.isMovingPiece) {
-            console.log('Mobile confirm movement');
-            this.confirmMovement();
-        } else if (this.selectedPiece) {
-            console.log('Mobile confirm initial position');
-            this.confirmInitialPosition();
-        } else {
-            console.log('No piece selected for mobile confirm');
-            this.showMessage('Selecciona una pieza primero');
-        }
+        // Removed - no longer needed since movements are immediate
+        console.log('Confirm button pressed - no action needed with immediate movement system');
+        this.showMessage('Los movimientos son inmediatos');
     }
     
     handleMobileCancel() {
-        if (this.isMovingPiece) {
-            console.log('Mobile cancel movement');
-            this.cancelMovement();
-        } else {
-            console.log('Mobile deselect piece');
-            this.deselectPiece();
-        }
+        // Only deselect piece now
+        console.log('Cancel/Deselect button pressed');
+        this.deselectPiece();
     }
     
     updateScoreDisplay() {
@@ -585,8 +587,60 @@ class GameScene extends Phaser.Scene {
     
     // Add new method to spawn pieces manually
     spawnNewPiece() {
-        console.log('Space pressed - spawning new piece manually');
+        // Block spawning during animations
+        if (this.isAnimationPlaying) {
+            this.showMessage('Espera a que termine la animación');
+            return;
+        }
+        
+        console.log('Space pressed - first checking lines, then spawning new piece');
+        const wasSelected = this.selectedPiece !== null;
+        
+        // If there was a selected piece, deselect it first
+        if (wasSelected) {
+            console.log('Deselecting piece before line check');
+            this.selectedPiece = null;
+            this.isIndividualMode = false;
+            this.clearSelectionHighlights();
+        }
+        
+        // First: Always check for lines and merges
+        console.log('Step 1: Checking for lines and merges...');
+        this.showMessage('Verificando líneas completas...');
+        
+        // Block actions during the entire sequence
+        this.isAnimationPlaying = true;
+        
+        // Check for completed lines first
+        const hasCompletedLines = this.hasCompletedLines();
+        
+        if (hasCompletedLines) {
+            console.log('Lines found - clearing them before spawning new piece');
+            this.checkAndClearRectangles(() => {
+                // After line animation completes, check for merges
+                console.log('Step 2: Checking for merges after line clearing...');
+                this.checkAndMergeSameColorPieces(() => {
+                    // After all animations complete, spawn new piece
+                    console.log('Step 3: Spawning new piece after all animations complete');
+                    this.spawnNewPieceAfterAnimations();
+                });
+            });
+        } else {
+            // No lines to clear, but still check for merges
+            console.log('No lines found - checking for merges only');
+            this.checkAndMergeSameColorPieces(() => {
+                // After merge animations complete, spawn new piece
+                console.log('Step 2: Spawning new piece after merge check');
+                this.spawnNewPieceAfterAnimations();
+            });
+        }
+    }
+    
+    spawnNewPieceAfterAnimations() {
+        console.log('All animations complete - spawning new piece now');
         this.spawnNextPieceRandomly();
+        this.isAnimationPlaying = false; // Unblock actions
+        this.showMessage('Nueva pieza añadida');
     }
     
     checkAndSpawnNewPieces() {
@@ -631,6 +685,11 @@ class GameScene extends Phaser.Scene {
     }
     
     handleInput() {
+        // Block all input during animations
+        if (this.isAnimationPlaying) {
+            return;
+        }
+        
         // New rule: Always require a piece to be selected before moving
         if (Phaser.Input.Keyboard.JustDown(this.cursors.left)) {
             if (this.selectedPiece) {
@@ -683,30 +742,9 @@ class GameScene extends Phaser.Scene {
             }
         }
         
-    // ENTER key to confirm movement
-        if (Phaser.Input.Keyboard.JustDown(this.input.keyboard.addKey('ENTER'))) {
-            if (this.selectedPiece && this.isMovingPiece) {
-                console.log('ENTER pressed, confirming movement');
-                this.confirmMovement();
-            } else if (this.selectedPiece) {
-                // If piece is selected but not moving, this might be a newly spawned piece
-                // Treat this as confirming the initial position
-                console.log('ENTER pressed on selected piece - confirming initial/current position');
-                this.confirmInitialPosition();
-            } else {
-                console.log('No piece selected! Click on a piece first.');
-                this.showMessage('Selecciona una pieza primero');
-            }
-        }
-        
-        // ESC key to deselect piece or cancel movement
+        // ESC key to deselect piece
         if (Phaser.Input.Keyboard.JustDown(this.input.keyboard.addKey('ESC'))) {
-            if (this.isMovingPiece) {
-                console.log('ESC pressed, cancelling movement');
-                this.cancelMovement();
-            } else {
-                this.deselectPiece();
-            }
+            this.deselectPiece();
         }
         
         // M key to manually test merging
@@ -722,17 +760,13 @@ class GameScene extends Phaser.Scene {
     moveSelectedPieceOneCell(deltaX, deltaY) {
         if (!this.selectedPiece) return;
         
-        console.log(`Moving selected piece ${this.selectedPiece.id} by deltaX: ${deltaX}, deltaY: ${deltaY} (one cell)`);
-        
-        // Store original position if this is the first move
-        if (!this.isMovingPiece) {
-            this.tempPosition = {
-                originalX: this.selectedPiece.x,
-                originalY: this.selectedPiece.y,
-                originalRotatedShape: this.selectedPiece.rotatedShape ? [...this.selectedPiece.rotatedShape.map(row => [...row])] : null
-            };
-            this.isMovingPiece = true;
+        // Block movement during animations
+        if (this.isAnimationPlaying) {
+            this.showMessage('Espera a que termine la animación');
+            return;
         }
+        
+        console.log(`Moving selected piece ${this.selectedPiece.id} by deltaX: ${deltaX}, deltaY: ${deltaY} (one cell)`);
         
         // Remove piece from current position
         this.removePieceFromGrid(this.selectedPiece);
@@ -746,25 +780,27 @@ class GameScene extends Phaser.Scene {
         
         // Check if the new position is valid
         if (this.canPlacePieceAt(this.selectedPiece, newX, newY)) {
-            // Move successful (temporarily)
+            // Move successful - immediately consume 1 point
             this.selectedPiece.x = newX;
             this.selectedPiece.y = newY;
             this.placePieceOnGrid(this.selectedPiece);
             
-            console.log(`Temporarily moved selected piece ${this.selectedPiece.id} from (${currentX}, ${currentY}) to (${newX}, ${newY})`);
+            // Consume 1 point for the movement
+            this.addScore(-1, 'movimiento');
             
-            // Update highlighting for new position (orange border for temp move)
+            console.log(`Moved selected piece ${this.selectedPiece.id} from (${currentX}, ${currentY}) to (${newX}, ${newY})`);
+            
+            // Update highlighting for new position
             this.highlightSelectedPiece();
             
-            // Re-render grid but DON'T check for merges or line clearing yet
+            // Re-render grid (merge check happens only when focus is lost)
             this.renderGrid();
             
-            this.showMessage('Movimiento temporal - presiona ENTER para confirmar o ESC para cancelar');
         } else {
-            // Move failed - put piece back
+            // Move failed - put piece back, no point cost for invalid moves
             this.placePieceOnGrid(this.selectedPiece);
             console.log(`Cannot move piece ${this.selectedPiece.id} to (${newX}, ${newY}) - position blocked or out of bounds`);
-            this.showMessage('Movimiento bloqueado');
+            this.showMessage('Movimiento bloqueado - sin costo');
         }
     }
     
@@ -903,7 +939,108 @@ class GameScene extends Phaser.Scene {
         return true;
     }
     
-    checkAndMergeSameColorPieces() {
+    checkAndMergeSameColorPieces(onComplete = null) {
+        console.log('=== Checking for same color piece merging ===');
+        console.log(`Current pieces before merging: ${this.pieces.length}`);
+        this.pieces.forEach(p => console.log(`  - ${p.type}(${p.id}) at (${p.x},${p.y}) color:${p.color.toString(16)}`));
+        
+        // Check if there are any groups to merge before starting animations
+        const initialMergeGroups = this.findMergeGroups();
+        if (initialMergeGroups.length > 0) {
+            // Block actions during the entire merge sequence
+            this.isAnimationPlaying = true;
+            // Process merges one group at a time with animation
+            this.processMergeGroups(onComplete);
+        } else {
+            // No merges to do, but still check for lines
+            console.log('No merges found, checking for complete lines...');
+            this.checkAndClearRectangles(false, onComplete);
+        }
+    }
+    
+    processMergeGroups(onComplete = null) {
+        const mergeGroups = this.findMergeGroups();
+        
+        if (mergeGroups.length === 0) {
+            // No more merges possible - finish and unblock actions
+            console.log(`✅ Merging complete. Final pieces: ${this.pieces.length}`);
+            this.pieces.forEach(p => console.log(`  - ${p.type}(${p.id}) at (${p.x},${p.y}) color:${p.color.toString(16)}`));
+            
+            // Unblock actions when all merges are complete
+            this.isAnimationPlaying = false;
+            
+            // Check for completed lines after all merges are done
+            this.checkAndClearRectangles(false, onComplete);
+            
+            console.log('=== End piece merging check ===');
+            return;
+        }
+        
+        console.log(`Found ${mergeGroups.length} merge groups`);
+        
+        // Process the first merge group with animation
+        const group = mergeGroups[0];
+        console.log(`🔥 MERGING group: ${group.length} pieces of color ${group[0].color.toString(16)}`);
+        group.forEach(p => console.log(`   - ${p.type}(${p.id}) at (${p.x},${p.y})`));
+        
+        // Count total cells before merging
+        let totalCellsBeforeMerge = 0;
+        group.forEach(piece => {
+            const cells = this.getPieceCells(piece);
+            totalCellsBeforeMerge += cells.length;
+        });
+        
+        // Create merge animation before removing pieces
+        this.animateMerge(group, () => {
+            // Add haptic feedback for merge
+            if (navigator.vibrate) {
+                navigator.vibrate([100, 50, 100]); // Pattern for merge vibration
+            }
+            
+            // Remove original pieces from grid
+            group.forEach(piece => {
+                this.removePieceFromGrid(piece);
+            });
+            
+            // Remove original pieces from pieces array
+            group.forEach(piece => {
+                const index = this.pieces.findIndex(p => p.id === piece.id);
+                if (index !== -1) {
+                    this.pieces.splice(index, 1);
+                }
+            });
+            
+            // Create merged piece
+            const mergedPiece = this.createMergedPiece(group);
+            
+            // Create texture for this specific fragment color if it doesn't exist
+            this.ensureFragmentTextureExists(mergedPiece.color);
+            
+            this.pieces.push(mergedPiece);
+            this.placePieceOnGrid(mergedPiece);
+            
+            // Calculate cells eliminated in merging process
+            const cellsAfterMerge = mergedPiece.cells.length;
+            const cellsEliminated = totalCellsBeforeMerge - cellsAfterMerge;
+            
+            // Add score for eliminated cells (overlapping cells that were removed)
+            if (cellsEliminated > 0) {
+                this.addScore(cellsEliminated * 1, `${cellsEliminated} celdas fusionadas`);
+            }
+            
+            console.log(`✅ Created merged piece ${mergedPiece.id} with ${mergedPiece.cells.length} cells (eliminated ${cellsEliminated} overlapping cells)`);
+            
+            // Re-render grid after merge
+            this.renderGrid();
+            
+            // Continue processing remaining merge groups after a short delay
+            setTimeout(() => {
+                this.processMergeGroups(onComplete);
+            }, 200);
+        });
+    }
+    
+    checkAndMergeSameColorPiecesOld() {
         console.log('=== Checking for same color piece merging ===');
         console.log(`Current pieces before merging: ${this.pieces.length}`);
         this.pieces.forEach(p => console.log(`  - ${p.type}(${p.id}) at (${p.x},${p.y}) color:${p.color.toString(16)}`));
@@ -920,7 +1057,7 @@ class GameScene extends Phaser.Scene {
             
             console.log(`Found ${mergeGroups.length} merge groups`);
             
-            // Process each merge group
+            // Process each merge group with animation
             mergeGroups.forEach((group, index) => {
                 console.log(`🔥 MERGING group ${index + 1}: ${group.length} pieces of color ${group[0].color.toString(16)}`);
                 group.forEach(p => console.log(`   - ${p.type}(${p.id}) at (${p.x},${p.y})`));
@@ -932,34 +1069,40 @@ class GameScene extends Phaser.Scene {
                     totalCellsBeforeMerge += cells.length;
                 });
                 
-                // Remove original pieces from grid
-                group.forEach(piece => {
-                    this.removePieceFromGrid(piece);
-                });
-                
-                // Remove original pieces from pieces array
-                group.forEach(piece => {
-                    const index = this.pieces.findIndex(p => p.id === piece.id);
-                    if (index !== -1) {
-                        this.pieces.splice(index, 1);
+                // Create merge animation before removing pieces
+                this.animateMerge(group, () => {
+                    // Remove original pieces from grid
+                    group.forEach(piece => {
+                        this.removePieceFromGrid(piece);
+                    });
+                    
+                    // Remove original pieces from pieces array
+                    group.forEach(piece => {
+                        const index = this.pieces.findIndex(p => p.id === piece.id);
+                        if (index !== -1) {
+                            this.pieces.splice(index, 1);
+                        }
+                    });
+                    
+                    // Create merged piece
+                    const mergedPiece = this.createMergedPiece(group);
+                    this.pieces.push(mergedPiece);
+                    this.placePieceOnGrid(mergedPiece);
+                    
+                    // Calculate cells eliminated in merging process
+                    const cellsAfterMerge = mergedPiece.cells.length;
+                    const cellsEliminated = totalCellsBeforeMerge - cellsAfterMerge;
+                    
+                    // Add score for eliminated cells (overlapping cells that were removed)
+                    if (cellsEliminated > 0) {
+                        this.addScore(cellsEliminated * 1, `${cellsEliminated} celdas fusionadas`);
                     }
+                    
+                    console.log(`✅ Created merged piece ${mergedPiece.id} with ${mergedPiece.cells.length} cells (eliminated ${cellsEliminated} overlapping cells)`);
+                    
+                    // Re-render grid after merge
+                    this.renderGrid();
                 });
-                
-                // Create merged piece
-                const mergedPiece = this.createMergedPiece(group);
-                this.pieces.push(mergedPiece);
-                this.placePieceOnGrid(mergedPiece);
-                
-                // Calculate cells eliminated in merging process
-                const cellsAfterMerge = mergedPiece.cells.length;
-                const cellsEliminated = totalCellsBeforeMerge - cellsAfterMerge;
-                
-                // Add score for eliminated cells (overlapping cells that were removed)
-                if (cellsEliminated > 0) {
-                    this.addScore(cellsEliminated * 1, `${cellsEliminated} celdas fusionadas`);
-                }
-                
-                console.log(`✅ Created merged piece ${mergedPiece.id} with ${mergedPiece.cells.length} cells (eliminated ${cellsEliminated} overlapping cells)`);
             });
             
             hasMerged = true;
@@ -981,6 +1124,161 @@ class GameScene extends Phaser.Scene {
         }
         
         console.log('=== End piece merging check ===');
+    }
+    
+    animateMerge(piecesToMerge, onComplete) {
+        console.log('🎬 Starting merge animation...');
+        
+        // Get all cells involved in the merge
+        const allCells = [];
+        piecesToMerge.forEach(piece => {
+            const pieceCells = this.getPieceCells(piece);
+            pieceCells.forEach(cell => {
+                allCells.push({
+                    row: cell.row,
+                    col: cell.col,
+                    piece: piece
+                });
+            });
+        });
+        
+        // Calculate the center point of all merging pieces
+        const centerX = allCells.reduce((sum, cell) => sum + cell.col, 0) / allCells.length;
+        const centerY = allCells.reduce((sum, cell) => sum + cell.row, 0) / allCells.length;
+        
+        // Create visual effects for each cell
+        const animationPromises = [];
+        
+        allCells.forEach((cell, index) => {
+            const cellX = cell.col * this.cellSize + this.cellSize / 2;
+            const cellY = cell.row * this.cellSize + this.cellSize / 2;
+            const centerPixelX = centerX * this.cellSize + this.cellSize / 2;
+            const centerPixelY = centerY * this.cellSize + this.cellSize / 2;
+            
+            // Create a temporary visual element for the merge effect
+            const mergeEffect = this.add.rectangle(cellX, cellY, this.cellSize - 4, this.cellSize - 4, cell.piece.color);
+            mergeEffect.setStrokeStyle(2, 0xffffff);
+            mergeEffect.setAlpha(0.8);
+            
+            // Create pulsing effect before movement
+            const pulsePromise = new Promise((resolve) => {
+                this.tweens.add({
+                    targets: mergeEffect,
+                    scaleX: 1.2,
+                    scaleY: 1.2,
+                    alpha: 1.0,
+                    duration: 200,
+                    yoyo: true,
+                    repeat: 1,
+                    onComplete: resolve
+                });
+            });
+            
+            // Create movement toward center
+            const movePromise = new Promise((resolve) => {
+                setTimeout(() => {
+                    this.tweens.add({
+                        targets: mergeEffect,
+                        x: centerPixelX,
+                        y: centerPixelY,
+                        scaleX: 0.5,
+                        scaleY: 0.5,
+                        alpha: 0.3,
+                        duration: 300,
+                        ease: 'Power2.easeInOut',
+                        delay: index * 50, // Stagger the animations
+                        onComplete: () => {
+                            mergeEffect.destroy();
+                            resolve();
+                        }
+                    });
+                }, 400); // Start after pulse animation
+            });
+            
+            animationPromises.push(pulsePromise, movePromise);
+        });
+        
+        // Create explosion effect at center
+        const explosionPromise = new Promise((resolve) => {
+            setTimeout(() => {
+                const centerPixelX = centerX * this.cellSize + this.cellSize / 2;
+                const centerPixelY = centerY * this.cellSize + this.cellSize / 2;
+                
+                // Create multiple particles for explosion effect
+                for (let i = 0; i < 8; i++) {
+                    const particle = this.add.rectangle(centerPixelX, centerPixelY, 8, 8, piecesToMerge[0].color);
+                    particle.setAlpha(0.8);
+                    
+                    // Random direction for each particle
+                    const angle = (i / 8) * Math.PI * 2;
+                    const distance = 40;
+                    const targetX = centerPixelX + Math.cos(angle) * distance;
+                    const targetY = centerPixelY + Math.sin(angle) * distance;
+                    
+                    this.tweens.add({
+                        targets: particle,
+                        x: targetX,
+                        y: targetY,
+                        alpha: 0,
+                        scaleX: 0.2,
+                        scaleY: 0.2,
+                        duration: 400,
+                        ease: 'Power2.easeOut',
+                        onComplete: () => {
+                            particle.destroy();
+                        }
+                    });
+                }
+                
+                // Flash effect at center
+                const flash = this.add.rectangle(centerPixelX, centerPixelY, this.cellSize * 1.5, this.cellSize * 1.5, 0xffffff);
+                flash.setAlpha(0);
+                
+                this.tweens.add({
+                    targets: flash,
+                    alpha: 0.6,
+                    duration: 100,
+                    yoyo: true,
+                    onComplete: () => {
+                        flash.destroy();
+                        resolve();
+                    }
+                });
+                
+            }, 600); // Start after pieces start moving
+        });
+        
+        // Wait for all animations to complete
+        Promise.all([...animationPromises, explosionPromise]).then(() => {
+            console.log('🎬 Merge animation complete');
+            if (onComplete) {
+                onComplete();
+            }
+        });
+    }
+    
+    ensureFragmentTextureExists(color) {
+        const textureKey = `tile_FRAGMENT_${color.toString(16)}`;
+        
+        // Check if texture already exists
+        if (this.textures.exists(textureKey)) {
+            return textureKey;
+        }
+        
+        console.log(`Creating fragment texture for color ${color.toString(16)}`);
+        
+        // Determine text color based on background color (white for dark colors, black for light colors)
+        let textColor;
+        if (color === 0xff0000 || color === 0x0000ff) { // Red or Blue
+            textColor = 0xffffff; // White text
+        } else { // Green or Yellow
+            textColor = 0x000000; // Black text
+        }
+        
+        // Create the texture
+        this.create2048StyleTile(`FRAGMENT_${color.toString(16)}`, color, textColor, 'FRAG');
+        
+        return textureKey;
     }
     
     findMergeGroups() {
@@ -1587,6 +1885,12 @@ class GameScene extends Phaser.Scene {
     rotateSelectedPiece() {
         if (!this.selectedPiece) return;
         
+        // Block rotation during animations
+        if (this.isAnimationPlaying) {
+            this.showMessage('Espera a que termine la animación');
+            return;
+        }
+        
         // Don't rotate FRAGMENT pieces as they have irregular shapes
         if (this.selectedPiece.type === 'FRAGMENT') {
             console.log('Cannot rotate FRAGMENT pieces');
@@ -1595,16 +1899,6 @@ class GameScene extends Phaser.Scene {
         }
         
         console.log(`Rotating selected piece ${this.selectedPiece.id} of type ${this.selectedPiece.type}`);
-        
-        // Store original position if this is the first move/rotation
-        if (!this.isMovingPiece) {
-            this.tempPosition = {
-                originalX: this.selectedPiece.x,
-                originalY: this.selectedPiece.y,
-                originalRotatedShape: this.selectedPiece.rotatedShape ? [...this.selectedPiece.rotatedShape.map(row => [...row])] : null
-            };
-            this.isMovingPiece = true;
-        }
         
         // Remove piece from grid temporarily
         this.removePieceFromGrid(this.selectedPiece);
@@ -1627,25 +1921,27 @@ class GameScene extends Phaser.Scene {
         
         // Check if the rotated piece fits in the current position
         if (this.canPlacePieceAt(testPiece, this.selectedPiece.x, this.selectedPiece.y)) {
-            // Rotation successful (temporarily)
+            // Rotation successful - immediately consume 1 point
             this.selectedPiece.rotatedShape = rotatedShape;
             this.placePieceOnGrid(this.selectedPiece);
             
-            console.log(`Successfully rotated piece ${this.selectedPiece.id} (temporarily)`);
+            // Consume 1 point for the rotation
+            this.addScore(-1, 'rotación');
+            
+            console.log(`Successfully rotated piece ${this.selectedPiece.id}`);
             console.log(`New rotated shape stored:`, this.selectedPiece.rotatedShape);
             
-            // Update highlighting for new shape (orange border for temp rotation)
+            // Update highlighting for new shape
             this.highlightSelectedPiece();
             
-            // Re-render grid but DON'T check for merges yet
+            // Re-render grid (merge check happens only when focus is lost)
             this.renderGrid();
             
-            this.showMessage('Rotación temporal - presiona ENTER para confirmar o ESC para cancelar');
         } else {
-            // Rotation failed - put piece back with original shape
+            // Rotation failed - put piece back with original shape, no point cost
             this.placePieceOnGrid(this.selectedPiece);
             console.log(`Cannot rotate piece ${this.selectedPiece.id} - not enough space`);
-            this.showMessage('No hay espacio para rotar');
+            this.showMessage('No hay espacio para rotar - sin costo');
         }
     }
     
@@ -1859,8 +2155,8 @@ class GameScene extends Phaser.Scene {
             this.selectPiece(piece);
             console.log(`Automatically selected new piece ${piece.type}(${piece.id})`);
             
-            // Show message about confirming position
-            this.showMessage('Nueva pieza generada - muévela o presiona ENTER para confirmar posición');
+            // Show message about new piece with immediate movement system
+            this.showMessage(`Nueva pieza ${piece.type} seleccionada - usa flechas para mover (-1 pt)`);
             
             // Validate game state after spawning
             this.validateGameState();
@@ -1974,16 +2270,24 @@ class GameScene extends Phaser.Scene {
                 if (piece) {
                     // Use appropriate texture based on piece type
                     if (piece.type === 'FRAGMENT') {
-                        cell.setTexture('tile_FRAGMENT');
+                        // Use color-specific fragment texture
+                        const fragmentTextureKey = `tile_FRAGMENT_${piece.color.toString(16)}`;
+                        if (this.textures.exists(fragmentTextureKey)) {
+                            cell.setTexture(fragmentTextureKey);
+                        } else {
+                            // Fallback to generic fragment with tint
+                            cell.setTexture('tile_FRAGMENT');
+                            cell.setTint(piece.color);
+                        }
                     } else {
                         cell.setTexture(`tile_${piece.type}`);
                     }
-                    // Apply color tint to match piece color (for fragments especially)
-                    if (piece.type === 'FRAGMENT') {
-                        cell.setTint(piece.color);
-                    } else {
+                    
+                    // Clear tint for non-fragment pieces
+                    if (piece.type !== 'FRAGMENT') {
                         cell.clearTint();
                     }
+                    
                     cell.setAlpha(1);
                 } else {
                     // Fallback if piece not found - this shouldn't happen
@@ -2030,8 +2334,47 @@ class GameScene extends Phaser.Scene {
         }
     }
     
-    checkAndClearRectangles() {
+    checkAndClearLines() {
+        const linesToClear = this.findCompleteLines();
+        
+        if (linesToClear.length > 0) {
+            console.log(`Found ${linesToClear.length} complete lines to clear: ${linesToClear.join(', ')}`);
+            
+            // Clear lines immediately for merge checking
+            this.clearLines(linesToClear);
+            this.splitDisconnectedPieces();
+            this.renderGrid();
+            
+            // Update score and level
+            let totalCells = 0;
+            linesToClear.forEach(line => {
+                if (line.type === 'row') {
+                    totalCells += this.gridWidth;
+                } else if (line.type === 'col') {
+                    totalCells += this.gridHeight;
+                }
+            });
+            
+            this.linesCleared += linesToClear.length;
+            
+            // Level up every 5 lines cleared
+            if (Math.floor(this.linesCleared / 5) + 1 > this.level) {
+                this.level++;
+            }
+            
+            this.updateScoreDisplay();
+        }
+        
+        return linesToClear.length;
+    }
+    
+    checkAndClearRectangles(isRecursiveCall = false, onComplete = null) {
         console.log('=== Checking for complete lines ===');
+        
+        // Store the original callback for the end of the entire chain
+        if (!isRecursiveCall && onComplete) {
+            this.pendingLineCallback = onComplete;
+        }
         
         // Print current grid state for debugging
         console.log('Current grid state:');
@@ -2053,6 +2396,11 @@ class GameScene extends Phaser.Scene {
         
         if (linesToClear.length > 0) {
             console.log(`Found ${linesToClear.length} complete lines to clear: ${linesToClear.join(', ')}`);
+            
+            // Block actions only on the first call (not recursive calls)
+            if (!isRecursiveCall) {
+                this.isAnimationPlaying = true;
+            }
             
             // Show flashing animation on completed lines before clearing them
             this.showLineCompletionAnimation(linesToClear, () => {
@@ -2087,15 +2435,31 @@ class GameScene extends Phaser.Scene {
                 this.createClearEffect(linesToClear);
                 
                 // Check for more lines after clearing (chain reactions) with longer delay
-                setTimeout(() => this.checkAndClearRectangles(), 1500); // Increased from 500 to 1500ms
+                setTimeout(() => this.checkAndClearRectangles(true), 1500); // Increased from 500 to 1500ms
             });
         } else {
             console.log('No complete lines found');
+            // No lines to clear, unblock actions (this ends the chain reaction)
+            this.isAnimationPlaying = false;
             // No lines to clear, make sure grid is properly rendered
             this.renderGrid();
+            
+            // Execute callback if this is the end of the entire chain reaction
+            if (this.pendingLineCallback && typeof this.pendingLineCallback === 'function') {
+                console.log('Executing pending callback after complete line chain reaction');
+                const callback = this.pendingLineCallback;
+                this.pendingLineCallback = null; // Clear the stored callback
+                callback();
+            }
         }
         
         console.log('=== Line check complete ===');
+    }
+    
+    hasCompletedLines() {
+        // Quick check if there are any completed lines without processing them
+        const lines = this.findCompleteLines();
+        return lines.length > 0;
     }
     
     findCompleteLines() {
@@ -2233,7 +2597,10 @@ class GameScene extends Phaser.Scene {
     }
     
     showLineCompletionAnimation(lines, onComplete) {
-        console.log('Starting line completion animation...');
+        console.log('Starting enhanced line completion animation...');
+        
+        // Block all actions during animation
+        this.isAnimationPlaying = true;
         
         // Store original cell appearances
         const originalCells = [];
@@ -2250,7 +2617,8 @@ class GameScene extends Phaser.Scene {
                             cell: cell,
                             originalTexture: cell.texture.key,
                             originalTint: cell.tint,
-                            originalAlpha: cell.alpha
+                            originalAlpha: cell.alpha,
+                            originalScale: cell.scale
                         });
                         animationCells.push(cell);
                     }
@@ -2265,7 +2633,8 @@ class GameScene extends Phaser.Scene {
                             cell: cell,
                             originalTexture: cell.texture.key,
                             originalTint: cell.tint,
-                            originalAlpha: cell.alpha
+                            originalAlpha: cell.alpha,
+                            originalScale: cell.scale
                         });
                         animationCells.push(cell);
                     }
@@ -2273,46 +2642,188 @@ class GameScene extends Phaser.Scene {
             }
         });
         
-        // Create flashing animation with color changes
-        let flashCount = 0;
-        const maxFlashes = 6; // Number of flashes
-        const flashDuration = 200; // Duration of each flash
+        // Phase 1: Initial impact wave
+        const wavePromises = [];
+        animationCells.forEach((cell, index) => {
+            const wavePromise = new Promise((resolve) => {
+                this.tweens.add({
+                    targets: cell,
+                    scaleX: 1.3,
+                    scaleY: 1.3,
+                    alpha: 1,
+                    duration: 150,
+                    delay: index * 30, // Stagger the wave effect
+                    ease: 'Back.easeOut',
+                    yoyo: true,
+                    onComplete: resolve
+                });
+            });
+            wavePromises.push(wavePromise);
+        });
         
-        const flashInterval = setInterval(() => {
-            const colors = [0xFFFFFF, 0xFFFF00, 0xFF0000, 0x00FF00, 0x0000FF, 0xFF00FF]; // White, Yellow, Red, Green, Blue, Magenta
-            const currentColor = colors[flashCount % colors.length];
+        // Phase 2: Intense flashing with rainbow colors and effects
+        Promise.all(wavePromises).then(() => {
+            let flashCount = 0;
+            const maxFlashes = 8; // More flashes for better effect
+            const flashDuration = 150; // Faster flashing
             
+            // Create additional visual effects
+            const effectsContainer = [];
+            
+            // Add sparkle particles around completed lines
             animationCells.forEach(cell => {
-                if (flashCount % 2 === 0) {
-                    // Flash with color
-                    cell.setTint(currentColor);
-                    cell.setAlpha(1);
-                } else {
-                    // Return to slightly dimmed original
-                    cell.clearTint();
-                    cell.setAlpha(0.7);
+                for (let i = 0; i < 3; i++) {
+                    const sparkle = this.add.circle(
+                        cell.x + (Math.random() - 0.5) * this.cellSize,
+                        cell.y + (Math.random() - 0.5) * this.cellSize,
+                        Math.random() * 3 + 2,
+                        0xffffff
+                    );
+                    sparkle.setAlpha(0);
+                    effectsContainer.push(sparkle);
+                    
+                    this.tweens.add({
+                        targets: sparkle,
+                        alpha: 1,
+                        scale: 2,
+                        duration: 800,
+                        delay: Math.random() * 500,
+                        ease: 'Power2.easeOut',
+                        onComplete: () => sparkle.destroy()
+                    });
                 }
             });
             
-            flashCount++;
-            
-            if (flashCount >= maxFlashes) {
-                clearInterval(flashInterval);
+            const flashInterval = setInterval(() => {
+                // Enhanced color palette with gradients
+                const colors = [
+                    0xFFFFFF, 0xFFD700, 0xFF69B4, 0x00FFFF, 
+                    0xFF4500, 0x32CD32, 0x9370DB, 0xFFA500
+                ];
+                const currentColor = colors[flashCount % colors.length];
                 
-                // Restore original appearances briefly
-                originalCells.forEach(data => {
-                    data.cell.setTexture(data.originalTexture);
-                    data.cell.setTint(data.originalTint);
-                    data.cell.setAlpha(data.originalAlpha);
+                animationCells.forEach((cell, index) => {
+                    if (flashCount % 2 === 0) {
+                        // Flash with enhanced color and effects
+                        cell.setTint(currentColor);
+                        cell.setAlpha(1);
+                        cell.setScale(1.1 + Math.sin(flashCount * 0.5) * 0.1);
+                        
+                        // Add rotation effect
+                        this.tweens.add({
+                            targets: cell,
+                            rotation: cell.rotation + 0.1,
+                            duration: flashDuration / 2,
+                            yoyo: true
+                        });
+                        
+                    } else {
+                        // Return to enhanced intermediate state
+                        cell.setTint(0xffffff);
+                        cell.setAlpha(0.8);
+                        cell.setScale(1.05);
+                    }
                 });
                 
-                // Wait a moment then call the completion callback
-                setTimeout(() => {
-                    console.log('Line completion animation finished');
-                    onComplete();
-                }, 300);
-            }
-        }, flashDuration);
+                // Add screen shake effect and haptic feedback
+                if (flashCount % 3 === 0) {
+                    this.cameras.main.shake(100, 0.015);
+                    // Enhanced vibration for line completion
+                    if (navigator.vibrate) {
+                        navigator.vibrate([100, 50, 100, 50, 200]);
+                    }
+                }
+                
+                flashCount++;
+                
+                if (flashCount >= maxFlashes) {
+                    clearInterval(flashInterval);
+                    
+                    // Phase 3: Dramatic disappearance effect
+                    const disappearPromises = [];
+                    
+                    animationCells.forEach((cell, index) => {
+                        const disappearPromise = new Promise((resolve) => {
+                            // Create explosion particles
+                            for (let i = 0; i < 5; i++) {
+                                const particle = this.add.circle(
+                                    cell.x, cell.y, 
+                                    Math.random() * 4 + 2, 
+                                    colors[Math.floor(Math.random() * colors.length)]
+                                );
+                                
+                                this.tweens.add({
+                                    targets: particle,
+                                    x: cell.x + (Math.random() - 0.5) * 200,
+                                    y: cell.y + (Math.random() - 0.5) * 200,
+                                    alpha: 0,
+                                    scale: 0,
+                                    duration: 600,
+                                    delay: i * 20,
+                                    ease: 'Power2.easeOut',
+                                    onComplete: () => particle.destroy()
+                                });
+                            }
+                            
+                            // Cell disappearance animation
+                            this.tweens.add({
+                                targets: cell,
+                                scaleX: 0,
+                                scaleY: 0,
+                                alpha: 0,
+                                rotation: Math.PI,
+                                duration: 400,
+                                delay: index * 50,
+                                ease: 'Back.easeIn',
+                                onComplete: resolve
+                            });
+                        });
+                        disappearPromises.push(disappearPromise);
+                    });
+                    
+                    // Wait for all disappear animations to complete
+                    Promise.all(disappearPromises).then(() => {
+                        // Restore original appearances
+                        originalCells.forEach(data => {
+                            data.cell.setTexture(data.originalTexture);
+                            data.cell.setTint(data.originalTint);
+                            data.cell.setAlpha(data.originalAlpha);
+                            data.cell.setScale(data.originalScale);
+                            data.cell.setRotation(0);
+                        });
+                        
+                        // Clean up any remaining effects
+                        effectsContainer.forEach(effect => {
+                            if (effect && effect.destroy) {
+                                effect.destroy();
+                            }
+                        });
+                        
+                        // Final flash effect
+                        const finalFlash = this.add.rectangle(
+                            this.gridWidth * this.cellSize / 2,
+                            this.gridHeight * this.cellSize / 2,
+                            this.gridWidth * this.cellSize,
+                            this.gridHeight * this.cellSize,
+                            0xffffff
+                        );
+                        finalFlash.setAlpha(0);
+                        
+                        this.tweens.add({
+                            targets: finalFlash,
+                            alpha: 0.8,
+                            duration: 100,
+                            yoyo: true,
+                            onComplete: () => {
+                                finalFlash.destroy();
+                                console.log('Enhanced line completion animation finished');
+                                onComplete();
+                            }
+                        });
+                    });
+                }
+            }, flashDuration);
+        });
     }
     
     clearLines(lines) {
@@ -3003,7 +3514,7 @@ class GameScene extends Phaser.Scene {
         this.pieces = [];
         this.nextPieces = [];
         this.nextPieceId = 1;
-        this.score = 0;
+        this.score = 20;
         this.level = 1;
         this.linesCleared = 0;
         
@@ -3040,7 +3551,7 @@ class GameScene extends Phaser.Scene {
         this.initializeGrid();
         this.pieces = [];
         this.nextPieceId = 1;
-        this.score = 0;
+        this.score = 20; // Reset to initial score
         this.level = 1;
         this.linesCleared = 0;
         
@@ -3049,11 +3560,15 @@ class GameScene extends Phaser.Scene {
         this.isIndividualMode = false;
         this.clearSelectionHighlights();
         this.rectanglesCleared = 0;
-        this.updateScore();
+        this.updateScoreDisplay();
         
         if (this.gridGraphics) {
             this.renderGrid();
         }
+        
+        // Start the game and show initial message
+        this.gameState = 'playing';
+        this.showMessage('Presiona ESPACIO para generar pieza. Las fusiones ocurren al perder focus.');
     }
     
     gameOver() {
